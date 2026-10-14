@@ -1,6 +1,7 @@
 """Read-only, asynchronous Kanka API access with explicit campaign boundaries."""
 
 from collections.abc import Mapping
+from unicodedata import normalize
 from typing import Any
 from urllib.parse import quote
 
@@ -97,7 +98,7 @@ class KankaClient:
             raise ValueError(f"{name} must be a positive integer")
 
     async def _get(
-        self, path: str, *, params: dict[str, int] | None = None
+        self, path: str, *, params: dict[str, int | str] | None = None
     ) -> dict[str, Any]:
         """GET and validate one Kanka JSON envelope; never leak bearer tokens."""
         try:
@@ -122,35 +123,84 @@ class KankaClient:
         Raises:
             KankaError: If paging is incomplete or the API returns bad data.
         """
-        campaigns: list[dict[str, Any]] = []
+        campaigns = await self._list_rows("campaigns")
+        return [
+            campaign
+            for campaign in campaigns
+            if self._allowed_campaign_ids is None
+            or campaign["id"] in self._allowed_campaign_ids
+        ]
+
+    async def find_entities_by_name(
+        self, campaign_id: int, name: str
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Find entity records by name, resolving IDs directly from Kanka.
+
+        Kanka's ``entities?name=`` filter is a substring search. Return exact
+        matches separately; never guess an ID when names are ambiguous.
+
+        Args:
+            campaign_id: A campaign accessible to the configured token.
+            name: Non-empty entity name, in its original language.
+
+        Returns:
+            Exact and partial name matches with their universal entity IDs.
+
+        Raises:
+            ValueError: For invalid campaign IDs or an empty name.
+            KankaError: On invalid responses or incomplete pagination.
+        """
+        self._check_campaign(campaign_id)
+        if not isinstance(name, str) or not name.strip():
+            raise ValueError("name must be a non-empty string")
+        requested = normalize("NFC", name.strip()).casefold()
+        rows = await self._list_rows(
+            f"campaigns/{campaign_id}/entities", params={"name": name.strip()}
+        )
+        matches: dict[str, list[dict[str, Any]]] = {"exact": [], "partial": []}
+        for row in rows:
+            if not isinstance(row.get("name"), str):
+                raise KankaError("Invalid entity name")
+            candidate = {
+                "entity_id": row["id"],
+                "name": row["name"],
+                "entity_type": row.get("entity_type"),
+                "child_id": row.get("child_id"),
+            }
+            exact = normalize("NFC", row["name"]).casefold() == requested
+            matches["exact" if exact else "partial"].append(candidate)
+        return matches
+
+    async def _list_rows(
+        self, path: str, *, params: dict[str, int | str] | None = None
+    ) -> list[dict[str, Any]]:
+        """Read every page, rejecting malformed or truncated listings."""
+        rows: list[dict[str, Any]] = []
         for page in range(1, MAX_CAMPAIGN_PAGES + 1):
-            response = await self._get("campaigns", params={"page": page})
-            rows = response["data"]
-            if not isinstance(rows, list) or not all(
-                isinstance(row, dict) and type(row.get("id")) is int
-                for row in rows
+            response = await self._get(path, params={**(params or {}), "page": page})
+            batch = response["data"]
+            if not isinstance(batch, list) or not all(
+                isinstance(row, dict)
+                and type(row.get("id")) is int
+                and row["id"] > 0
+                for row in batch
             ):
-                raise KankaError("Invalid campaign listing")
-            campaigns.extend(
-                row
-                for row in rows
-                if self._allowed_campaign_ids is None
-                or row["id"] in self._allowed_campaign_ids
-            )
+                raise KankaError("Invalid entity listing")
+            rows.extend(batch)
             meta = response.get("meta", {})
             links = response.get("links", {})
             if not isinstance(meta, dict) or not isinstance(links, dict):
-                raise KankaError("Invalid campaign pagination metadata")
+                raise KankaError("Invalid pagination metadata")
             last = meta.get("last_page")
             if last is not None:
                 if type(last) is not int or last < page:
-                    raise KankaError("Invalid campaign last_page")
+                    raise KankaError("Invalid pagination last_page")
                 has_next = page < last
             else:
                 has_next = bool(links.get("next"))
             if not has_next:
-                return campaigns
-        raise KankaError("Campaign listing exceeded the pagination safety limit")
+                return rows
+        raise KankaError("Listing exceeded the pagination safety limit")
 
     async def search_entities(
         self, campaign_id: int, query: str, *, page: int = 1

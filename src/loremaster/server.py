@@ -44,6 +44,17 @@ def create_server(client: KankaClient) -> FastMCP:
         return await client.search_entities(campaign_id, query, page=page)
 
     @server.tool()
+    async def find_entities_by_name(
+        campaign_id: int, name: str
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Find named entities and their IDs without relying on text mentions.
+
+        Exact and partial matches are returned separately. When multiple exact
+        matches exist, ask the user to disambiguate before using an ID.
+        """
+        return await client.find_entities_by_name(campaign_id, name)
+
+    @server.tool()
     async def get_entity(campaign_id: int, entity_id: int) -> dict[str, Any]:
         """Read an entity, its module-specific record, and available related data.
 

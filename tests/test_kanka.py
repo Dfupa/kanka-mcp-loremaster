@@ -194,9 +194,7 @@ async def test_http_errors_do_not_expose_token(status):
 
 @pytest.mark.asyncio
 async def test_invalid_json_and_missing_data_are_rejected():
-    responses = iter(
-        [httpx.Response(200, text="broken"), httpx.Response(200, json={})]
-    )
+    responses = iter([httpx.Response(200, text="broken"), httpx.Response(200, json={})])
     client = mock_client(lambda request: next(responses))
     try:
         with pytest.raises(KankaError, match="invalid JSON"):
@@ -210,12 +208,103 @@ async def test_invalid_json_and_missing_data_are_rejected():
 @pytest.mark.asyncio
 async def test_mismatched_campaign_is_rejected():
     client = mock_client(
-        lambda request: httpx.Response(
-            200, json={"data": {"id": 42, "campaign_id": 8}}
-        )
+        lambda request: httpx.Response(200, json={"data": {"id": 42, "campaign_id": 8}})
     )
     try:
         with pytest.raises(KankaError, match="different campaign"):
             await client.get_entity(7, 42)
     finally:
         await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_find_entities_by_name_uses_entity_filter_and_universal_ids() -> None:
+    """Find entity records, not text mentions, across paginated results."""
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/1.0/campaigns/7/entities"
+        assert request.url.params["name"] == "Marcian"
+        page = int(request.url.params["page"])
+        calls.append(page)
+        data = (
+            [{"id": 42, "child_id": 5, "entity_type": "character", "name": "Marcian"}]
+            if page == 1
+            else [{"id": 56, "child_id": 8, "entity_type": "character", "name": "Sir Marcian"}]
+        )
+        return httpx.Response(200, json={"data": data, "meta": {"last_page": 2}})
+
+    client = mock_client(handler)
+    try:
+        result = await client.find_entities_by_name(7, " Marcian ")
+        assert [row["entity_id"] for row in result["exact"]] == [42]
+        assert [row["entity_id"] for row in result["partial"]] == [56]
+        assert calls == [1, 2]
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_find_entities_keeps_duplicate_names_distinct() -> None:
+    """Identically named entities must not silently collapse to one ID."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {"id": 7, "name": "Elgith", "entity_type": "character"},
+                    {"id": 8, "name": "elgith", "entity_type": "location"},
+                ]
+            },
+        )
+
+    client = mock_client(handler)
+    try:
+        result = await client.find_entities_by_name(1, "ELGITH")
+        assert len(result["exact"]) == 2
+        assert {item["entity_id"] for item in result["exact"]} == {7, 8}
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_find_entities_rejects_empty_query_without_api_request() -> None:
+    """Malformed inputs cannot trigger an unrestricted entity listing."""
+    client = mock_client(lambda request: pytest.fail("Unexpected network request"))
+    try:
+        for value in ("", "   ", None, 123):
+            with pytest.raises(ValueError, match="name"):
+                await client.find_entities_by_name(7, value)
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_find_entities_rejects_incomplete_pagination() -> None:
+    """Fail rather than claim a name is missing after truncated results."""
+    client = mock_client(
+        lambda request: httpx.Response(
+            200, json={"data": [{"id": 7, "name": "Roderick"}], "meta": {"last_page": 21}}
+        )
+    )
+    try:
+        with pytest.raises(KankaError, match="pagination safety limit"):
+            await client.find_entities_by_name(7, "Roderick")
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_find_entities_rejects_malformed_records() -> None:
+    """Reject impossible identifiers or unnamed entities."""
+    for invalid_row in ({"id": "7", "name": "Marcian"}, {"id": 7}):
+        client = mock_client(
+            lambda request: httpx.Response(200, json={"data": [invalid_row]})
+        )
+        try:
+            with pytest.raises(KankaError):
+                await client.find_entities_by_name(7, "Marcian")
+        finally:
+            await client.aclose()
