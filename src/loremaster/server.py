@@ -75,7 +75,9 @@ def main() -> None:
             else None
         )
     except ValueError:
-        raise ValueError("KANKA_ALLOWED_CAMPAIGN_IDS must contain integer IDs") from None
+        raise ValueError(
+            "KANKA_ALLOWED_CAMPAIGN_IDS must contain integer IDs"
+        ) from None
     client = KankaClient(token, allowed_campaign_ids=allowed)
     create_server(client).run(transport="stdio")
 
