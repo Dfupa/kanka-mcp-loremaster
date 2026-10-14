@@ -58,6 +58,27 @@ async def test_filters_campaigns_across_pages():
 
 
 @pytest.mark.asyncio
+async def test_unrestricted_token_can_list_all_campaigns() -> None:
+    """An unset allowlist leaves Kanka's token permissions in control."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/1.0/campaigns"
+        return httpx.Response(
+            200,
+            json={
+                "data": [{"id": 7, "name": "A"}, {"id": 8, "name": "B"}],
+                "meta": {"last_page": 1},
+            },
+        )
+
+    client = mock_client(handler)
+    try:
+        assert [row["id"] for row in await client.list_campaigns()] == [7, 8]
+    finally:
+        await client.aclose()
+
+
+@pytest.mark.asyncio
 async def test_search_encodes_unicode_and_preserves_entity_ids():
     def handler(request):
         assert request.url.path.endswith("/search/Ávilon Weiss")
