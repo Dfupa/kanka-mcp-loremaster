@@ -231,7 +231,14 @@ async def test_find_entities_by_name_uses_entity_filter_and_universal_ids() -> N
         data = (
             [{"id": 42, "child_id": 5, "entity_type": "character", "name": "Marcian"}]
             if page == 1
-            else [{"id": 56, "child_id": 8, "entity_type": "character", "name": "Sir Marcian"}]
+            else [
+                {
+                    "id": 56,
+                    "child_id": 8,
+                    "entity_type": "character",
+                    "name": "Sir Marcian",
+                }
+            ]
         )
         return httpx.Response(200, json={"data": data, "meta": {"last_page": 2}})
 
@@ -286,7 +293,11 @@ async def test_find_entities_rejects_incomplete_pagination() -> None:
     """Fail rather than claim a name is missing after truncated results."""
     client = mock_client(
         lambda request: httpx.Response(
-            200, json={"data": [{"id": 7, "name": "Roderick"}], "meta": {"last_page": 21}}
+            200,
+            json={
+                "data": [{"id": 7, "name": "Roderick"}],
+                "meta": {"last_page": 21},
+            },
         )
     )
     try:
