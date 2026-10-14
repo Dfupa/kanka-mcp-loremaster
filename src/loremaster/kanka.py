@@ -1,8 +1,8 @@
 """Read-only, asynchronous Kanka API access with explicit campaign boundaries."""
 
 from collections.abc import Mapping
-from unicodedata import normalize
 from typing import Any
+from unicodedata import normalize
 from urllib.parse import quote
 
 import httpx
