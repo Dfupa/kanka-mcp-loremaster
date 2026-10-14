@@ -307,15 +307,19 @@ async def test_find_entities_rejects_incomplete_pagination() -> None:
         await client.aclose()
 
 
+@pytest.mark.parametrize(
+    "invalid_row", [{"id": "7", "name": "Marcian"}, {"id": 7}]
+)
 @pytest.mark.asyncio
-async def test_find_entities_rejects_malformed_records() -> None:
+async def test_find_entities_rejects_malformed_records(
+    invalid_row: dict[str, str | int],
+) -> None:
     """Reject impossible identifiers or unnamed entities."""
-    for invalid_row in ({"id": "7", "name": "Marcian"}, {"id": 7}):
-        client = mock_client(
-            lambda request: httpx.Response(200, json={"data": [invalid_row]})
-        )
-        try:
-            with pytest.raises(KankaError):
-                await client.find_entities_by_name(7, "Marcian")
-        finally:
-            await client.aclose()
+    client = mock_client(
+        lambda request: httpx.Response(200, json={"data": [invalid_row]})
+    )
+    try:
+        with pytest.raises(KankaError):
+            await client.find_entities_by_name(7, "Marcian")
+    finally:
+        await client.aclose()
