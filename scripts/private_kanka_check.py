@@ -87,6 +87,7 @@ async def query() -> dict:
     result: dict = {"read_only": True, "results": {}, "errors": []}
     try:
         campaigns = await rows("campaigns", max_pages=5)
+        result["campaigns_found"] = len(campaigns)
         if len(campaigns) > 15:
             raise RuntimeError("More than 15 campaigns")
         for name in NAMES:
