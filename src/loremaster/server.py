@@ -11,7 +11,7 @@ from loremaster.kanka import KankaClient
 
 
 def create_server(client: KankaClient) -> FastMCP:
-    """Bind the four read-only tools to an injectable Kanka API client.
+    """Bind read-only tools to an injectable Kanka API client.
 
     Args:
         client: Configured Kanka API client. Ownership is transferred to the

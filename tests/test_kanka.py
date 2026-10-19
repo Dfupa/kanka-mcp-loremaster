@@ -117,13 +117,21 @@ async def test_get_entity_uses_child_id_and_related_flag():
             )
         assert request.url.path.endswith("/characters/5")
         assert request.url.params["related"] == "1"
-        return httpx.Response(200, json={"data": {"id": 5, "entry": "Lore"}})
+        return httpx.Response(
+            200,
+            json={"data": {"id": 5, "entity_id": 42, "name": "Weiss", "entry": "Lore"}},
+        )
 
     client = mock_client(handler)
     try:
         result = await client.get_entity(7, 42)
         assert result["entity"]["id"] == 42
-        assert result["details"] == {"id": 5, "entry": "Lore"}
+        assert result["details"] == {
+            "id": 5,
+            "entity_id": 42,
+            "name": "Weiss",
+            "entry": "Lore",
+        }
         assert len(requested) == 2
     finally:
         await client.aclose()
@@ -263,7 +271,8 @@ async def test_find_entities_keeps_duplicate_names_distinct() -> None:
                 "data": [
                     {"id": 7, "name": "Elgith", "entity_type": "character"},
                     {"id": 8, "name": "elgith", "entity_type": "location"},
-                ]
+                ],
+                "meta": {"last_page": 1},
             },
         )
 
@@ -307,16 +316,16 @@ async def test_find_entities_rejects_incomplete_pagination() -> None:
         await client.aclose()
 
 
-@pytest.mark.parametrize(
-    "invalid_row", [{"id": "7", "name": "Marcian"}, {"id": 7}]
-)
+@pytest.mark.parametrize("invalid_row", [{"id": "7", "name": "Marcian"}, {"id": 7}])
 @pytest.mark.asyncio
 async def test_find_entities_rejects_malformed_records(
     invalid_row: dict[str, str | int],
 ) -> None:
     """Reject impossible identifiers or unnamed entities."""
     client = mock_client(
-        lambda request: httpx.Response(200, json={"data": [invalid_row]})
+        lambda request: httpx.Response(
+            200, json={"data": [invalid_row], "meta": {"last_page": 1}}
+        )
     )
     try:
         with pytest.raises(KankaError):

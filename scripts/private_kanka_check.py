@@ -125,14 +125,20 @@ async def query() -> dict:
                                 if generic.get("entity_type") == "character" and (
                                     type(child_id) is int
                                 ):
-                                    detail = (await get(
-                                        f"campaigns/{campaign_id}/characters/{child_id}"
-                                    ))["data"]
+                                    detail = (
+                                        await get(
+                                            f"campaigns/{campaign_id}/characters/{child_id}"
+                                        )
+                                    )["data"]
                                     item["character"] = {
                                         key: detail.get(key)
                                         for key in (
-                                            "name", "title", "age", "type",
-                                            "entry", "is_dead"
+                                            "name",
+                                            "title",
+                                            "age",
+                                            "type",
+                                            "entry",
+                                            "is_dead",
                                         )
                                     }
                             elif name == "Roderick":
@@ -141,8 +147,13 @@ async def query() -> dict:
                                     {
                                         key: entry.get(key)
                                         for key in (
-                                            "id", "name", "item_id", "item",
-                                            "amount", "position", "is_equipped"
+                                            "id",
+                                            "name",
+                                            "item_id",
+                                            "item",
+                                            "amount",
+                                            "position",
+                                            "is_equipped",
                                         )
                                     }
                                     for entry in items
@@ -153,8 +164,13 @@ async def query() -> dict:
                                     {
                                         key: relation.get(key)
                                         for key in (
-                                            "id", "owner_id", "target_id", "target",
-                                            "relation", "attitude", "is_pinned"
+                                            "id",
+                                            "owner_id",
+                                            "target_id",
+                                            "target",
+                                            "relation",
+                                            "attitude",
+                                            "is_pinned",
                                         )
                                     }
                                     for relation in relations
@@ -163,11 +179,13 @@ async def query() -> dict:
                             item["error"] = str(error)
                         result["results"][name].append(item)
                 except (RuntimeError, TypeError, ValueError) as error:
-                    result["errors"].append({
-                        "name": name,
-                        "campaign_id": campaign_id,
-                        "error": str(error),
-                    })
+                    result["errors"].append(
+                        {
+                            "name": name,
+                            "campaign_id": campaign_id,
+                            "error": str(error),
+                        }
+                    )
     finally:
         await client.aclose()
     return result

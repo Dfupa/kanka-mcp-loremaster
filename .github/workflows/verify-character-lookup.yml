@@ -1,17 +1,16 @@
-name: One-time read-only character lookup
+name: Read-only character lookup
 
 on:
-  push:
-    branches: [feat/read-only-foundation]
-    paths:
-      - .github/workflows/verify-character-lookup.yml
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   verify:
-    if: github.repository == 'Dfupa/kanka-mcp-loremaster'
+    if: >-
+      github.repository == 'Dfupa/kanka-mcp-loremaster' &&
+      github.ref == 'refs/heads/feat/read-only-foundation'
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
@@ -21,96 +20,7 @@ jobs:
           python-version: '3.13'
       - name: Install existing read-only LoreMaster client
         run: python -m pip install -e .
-      - name: Verify character identities (GET only; no private data in logs)
+      - name: Verify character identities (GET only; public-safe diagnostics)
         env:
           KANKA_API_TOKEN: ${{ secrets.KANKA_API_TOKEN }}
-        run: |
-          python - <<'PY'
-          import asyncio
-          import os
-          from typing import Any
-
-          from loremaster.kanka import KankaClient, KankaError
-
-          NAMES = ("Marcian", "Roderick", "Elgith")
-          FALLBACK_CAMPAIGN_ID = 33742
-          assert len(set(NAMES)) == 3
-
-
-          async def verify_campaign(client: KankaClient, campaign_id: int) -> bool:
-              """Resolve and verify three actual character entities by name."""
-              if not isinstance(campaign_id, int) or campaign_id <= 0:
-                  raise ValueError("Invalid campaign ID")
-              successes: set[str] = set()
-              for name in NAMES:
-                  await asyncio.sleep(2.1)
-                  try:
-                      candidates = await client.find_entities_by_name(campaign_id, name)
-                  except (KankaError, ValueError, PermissionError) as exc:
-                      print(f"{name}: QUERY ERROR ({type(exc).__name__})")
-                      continue
-                  exact = candidates["exact"]
-                  if not exact:
-                      print(f"{name}: NOT FOUND (no exact entity match)")
-                      continue
-                  verified: list[dict[str, Any]] = []
-                  for candidate in exact[:5]:
-                      await asyncio.sleep(2.1)
-                      try:
-                          record = await client.get_entity(
-                              campaign_id, candidate["entity_id"]
-                          )
-                      except (KankaError, ValueError, PermissionError) as exc:
-                          print(f"{name}: DETAILS ERROR ({type(exc).__name__})")
-                          continue
-                      entity = record["entity"]
-                      if (
-                          entity.get("entity_type") == "character"
-                          and entity.get("campaign_id") == campaign_id
-                          and str(entity.get("name", "")).casefold() == name.casefold()
-                      ):
-                          verified.append(entity)
-                  if len(verified) == 1 and len(exact) == 1:
-                      print(f"{name}: VERIFIED (unique character entity)")
-                      successes.add(name)
-                  elif len(verified) > 1 or len(exact) > 1:
-                      print(f"{name}: AMBIGUOUS ({len(exact)} exact entities)")
-                  else:
-                      print(f"{name}: NOT VERIFIED (matching record unavailable)")
-              return len(successes) == len(NAMES)
-
-
-          async def main() -> None:
-              """Try visible campaigns, then the explicit fallback if necessary."""
-              token = os.environ.get("KANKA_API_TOKEN", "").strip()
-              if not token:
-                  raise SystemExit("KANKA_API_TOKEN is not configured")
-              client = KankaClient(token)
-              try:
-                  try:
-                      visible = await client.list_campaigns()
-                      visible_ids = [
-                          item["id"] for item in visible
-                          if type(item.get("id")) is int and item["id"] > 0
-                      ]
-                  except KankaError as exc:
-                      print(f"Campaign discovery failed: {type(exc).__name__}")
-                      visible_ids = []
-                  print(f"Visible campaigns: {len(visible_ids)}")
-                  for index, campaign_id in enumerate(dict.fromkeys(visible_ids), 1):
-                      print(f"Checking visible campaign #{index}")
-                      if await verify_campaign(client, campaign_id):
-                          print("PASS: all three character identities verified")
-                          return
-                  if FALLBACK_CAMPAIGN_ID not in visible_ids:
-                      print("Checking requested fallback campaign 33742")
-                      if await verify_campaign(client, FALLBACK_CAMPAIGN_ID):
-                          print("PASS: all three character identities verified")
-                          return
-                  raise SystemExit("FAIL: not all three identities were verified")
-              finally:
-                  await client.aclose()
-
-
-          asyncio.run(main())
-          PY
+        run: python scripts/verify_character_lookup.py

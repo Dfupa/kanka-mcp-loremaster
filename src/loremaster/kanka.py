@@ -1,5 +1,6 @@
 """Read-only, asynchronous Kanka API access with explicit campaign boundaries."""
 
+import asyncio
 from collections.abc import Mapping
 from typing import Any
 from unicodedata import normalize
@@ -9,6 +10,8 @@ import httpx
 
 API_BASE_URL = "https://api.kanka.io/1.0/"
 MAX_CAMPAIGN_PAGES = 20
+MAX_RATE_LIMIT_RETRIES = 2
+MAX_RETRY_DELAY = 30
 
 # A generic entity_id must be resolved to the module's own child_id.
 ENTITY_ENDPOINTS: Mapping[str, str] = {
@@ -102,7 +105,17 @@ class KankaClient:
     ) -> dict[str, Any]:
         """GET and validate one Kanka JSON envelope; never leak bearer tokens."""
         try:
-            response = await self._http.get(path, params=params)
+            for attempt in range(MAX_RATE_LIMIT_RETRIES + 1):
+                response = await self._http.get(path, params=params)
+                if response.status_code != 429 or attempt == MAX_RATE_LIMIT_RETRIES:
+                    break
+                retry_after = response.headers.get("Retry-After", "")
+                delay = (
+                    int(retry_after) if retry_after.isdecimal() else 2 ** (attempt + 1)
+                )
+                if delay > MAX_RETRY_DELAY:
+                    break
+                await asyncio.sleep(delay)
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             code = exc.response.status_code
@@ -116,6 +129,20 @@ class KankaClient:
         if not isinstance(payload, dict) or "data" not in payload:
             raise KankaError("Kanka returned an invalid response envelope")
         return payload
+
+    @staticmethod
+    def _entity_type(entity: dict[str, Any]) -> str:
+        """Read the module code from current or legacy generic entity schemas.
+
+        Current generic records use ``type`` for the module and ``type_field``
+        for the user-defined subtype. Child records use a different contract.
+        """
+        code = entity.get(
+            "entity_type", entity.get("entity_type_code", entity.get("type"))
+        )
+        if not isinstance(code, str) or not code.strip():
+            raise KankaError("Invalid entity type")
+        return code
 
     async def list_campaigns(self) -> list[dict[str, Any]]:
         """List accessible campaigns across pages, honoring the read allowlist.
@@ -161,13 +188,21 @@ class KankaClient:
         for row in rows:
             if not isinstance(row.get("name"), str):
                 raise KankaError("Invalid entity name")
+            if "campaign_id" in row and (
+                type(row["campaign_id"]) is not int or row["campaign_id"] != campaign_id
+            ):
+                raise KankaError("Kanka returned an entity from a different campaign")
+            candidate_name = normalize("NFC", row["name"]).casefold()
+            if requested not in candidate_name:
+                continue
             candidate = {
+                "campaign_id": campaign_id,
                 "entity_id": row["id"],
                 "name": row["name"],
-                "entity_type": row.get("entity_type"),
+                "entity_type": self._entity_type(row),
                 "child_id": row.get("child_id"),
             }
-            exact = normalize("NFC", row["name"]).casefold() == requested
+            exact = candidate_name == requested
             matches["exact" if exact else "partial"].append(candidate)
         return matches
 
@@ -180,9 +215,7 @@ class KankaClient:
             response = await self._get(path, params={**(params or {}), "page": page})
             batch = response["data"]
             if not isinstance(batch, list) or not all(
-                isinstance(row, dict)
-                and type(row.get("id")) is int
-                and row["id"] > 0
+                isinstance(row, dict) and type(row.get("id")) is int and row["id"] > 0
                 for row in batch
             ):
                 raise KankaError("Invalid entity listing")
@@ -191,11 +224,23 @@ class KankaClient:
             links = response.get("links", {})
             if not isinstance(meta, dict) or not isinstance(links, dict):
                 raise KankaError("Invalid pagination metadata")
+            if "last_page" not in meta and "next" not in links:
+                raise KankaError("Missing pagination completeness metadata")
+            current = meta.get("current_page", page)
+            if type(current) is not int or current != page:
+                raise KankaError("Invalid pagination current_page")
+            next_link = links.get("next")
+            if next_link is not None and (
+                not isinstance(next_link, str) or not next_link.strip()
+            ):
+                raise KankaError("Invalid pagination next link")
             last = meta.get("last_page")
-            if last is not None:
+            if "last_page" in meta:
                 if type(last) is not int or last < page:
                     raise KankaError("Invalid pagination last_page")
                 has_next = page < last
+                if "next" in links and bool(next_link) != has_next:
+                    raise KankaError("Inconsistent pagination metadata")
             else:
                 has_next = bool(links.get("next"))
             if not has_next:
@@ -235,19 +280,45 @@ class KankaClient:
             raise KankaError("Invalid entity details")
         if entity["id"] != entity_id:
             raise KankaError("Kanka returned a mismatched entity ID")
-        if entity.get("campaign_id") != campaign_id:
+        if (
+            type(entity.get("campaign_id")) is not int
+            or entity["campaign_id"] != campaign_id
+        ):
             raise KankaError("Kanka returned an entity from a different campaign")
-        endpoint = ENTITY_ENDPOINTS.get(entity.get("entity_type"))
+        entity = {**entity, "entity_type": self._entity_type(entity)}
+        endpoint = ENTITY_ENDPOINTS.get(entity["entity_type"])
         child_id = entity.get("child_id")
-        if endpoint is None or type(child_id) is not int or child_id <= 0:
+        if endpoint is None:
             return {"entity": entity, "details": None}
+        if type(child_id) is not int or child_id <= 0:
+            raise KankaError("Invalid module child ID")
         details = await self._get(
             f"campaigns/{campaign_id}/{endpoint}/{child_id}",
             params={"related": 1},
         )
         record = details["data"]
-        if not isinstance(record, dict) or record.get("id") != child_id:
+        if (
+            not isinstance(record, dict)
+            or type(record.get("id")) is not int
+            or record["id"] != child_id
+            or type(record.get("entity_id")) is not int
+            or record["entity_id"] != entity_id
+            or (
+                "campaign_id" in record
+                and (
+                    type(record["campaign_id"]) is not int
+                    or record["campaign_id"] != campaign_id
+                )
+            )
+        ):
             raise KankaError("Kanka returned mismatched module details")
+        if (
+            not isinstance(entity.get("name"), str)
+            or not isinstance(record.get("name"), str)
+            or normalize("NFC", entity["name"]).casefold()
+            != normalize("NFC", record["name"]).casefold()
+        ):
+            raise KankaError("Kanka returned a mismatched module name")
         return {"entity": entity, "details": record}
 
     async def get_entity_posts(
