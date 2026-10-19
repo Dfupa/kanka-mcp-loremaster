@@ -26,6 +26,23 @@ OperationClass = Literal[
     "organisation.create",
     "organisation.member.add",
     "item.create",
+    "character.update",
+    "post.update",
+    "inventory.update",
+    "relation.update",
+    "tag.update",
+    "race.update",
+    "family.create",
+    "family.update",
+    "quest.create",
+    "quest.update",
+    "map.create",
+    "map.update",
+    "journal.create",
+    "journal.update",
+    "note.create",
+    "note.update",
+    "location.create",
 ]
 MAX_PENDING_PROPOSALS = 100
 
@@ -60,6 +77,13 @@ class PostDraft(DraftRecord):
     name: Text
     entry: Text
     visibility_id: Annotated[int, Field(ge=1, le=5)] = 3
+
+
+class EntityPostDraft(PostDraft):
+    """Create one post on an existing entity, without creating another core record."""
+
+    campaign_id: ID
+    entity_id: ID
 
 
 class CharacterDraft(DraftRecord):
@@ -130,11 +154,108 @@ class ItemDraft(DraftRecord):
     weight: Text | None = None
 
 
-type CreationDraft = CharacterDraft | OrganisationDraft | ItemDraft
+class LoreDraft(DraftRecord):
+    """Shared core metadata for the additional, explicitly supported modules."""
+
+    campaign_id: ID
+    name: Text
+    entry: Text
+    is_private: bool = True
+    type: Text | None = None
+    tag_entity_ids: tuple[ID, ...] = ()
+
+    @field_validator(
+        "tag_entity_ids", "location_entity_ids", mode="before", check_fields=False
+    )
+    @classmethod
+    def json_reference_arrays(cls, values: Any) -> Any:
+        """Freeze JSON arrays while retaining strict validation of their IDs."""
+        return tuple(values) if isinstance(values, list) else values
+
+    @field_validator("tag_entity_ids", "location_entity_ids", check_fields=False)
+    @classmethod
+    def unique_references(cls, values: tuple[int, ...]) -> tuple[int, ...]:
+        """Reject duplicate assignments before building a proposal."""
+        if len(values) != len(set(values)):
+            raise ValueError("Lore references must be unique")
+        return values
+
+
+class FamilyDraft(LoreDraft):
+    """Create a family record; genealogical trees are separate resources."""
+
+    location_entity_ids: tuple[ID, ...] = ()
+
+
+class QuestDraft(LoreDraft):
+    """Create a mission/quest with an optional universal instigator reference."""
+
+    location_entity_ids: tuple[ID, ...] = ()
+    instigator_entity_id: ID | None = None
+    parent_entity_id: ID | None = None
+
+
+class MapDraft(LoreDraft):
+    """Create map metadata, without uploading images or creating markers/layers."""
+
+    location_entity_id: ID | None = None
+    is_real: bool = False
+
+
+class JournalDraft(LoreDraft):
+    """Create a diary/session journal; preserve date text without conversion."""
+
+    location_entity_ids: tuple[ID, ...] = ()
+    author_entity_id: ID | None = None
+    date: Text | None = None
+
+
+class NoteDraft(LoreDraft):
+    """Create a standalone note, separately from a journal or entity post."""
+
+    parent_entity_id: ID | None = None
+
+
+class LocationDraft(LoreDraft):
+    """Create a location's core metadata without inventing a parent hierarchy."""
+
+    title: Text | None = None
+
+
+type CreationDraft = (
+    CharacterDraft
+    | OrganisationDraft
+    | ItemDraft
+    | FamilyDraft
+    | QuestDraft
+    | MapDraft
+    | JournalDraft
+    | NoteDraft
+    | LocationDraft
+    | EntityPostDraft
+)
 DRAFT_MODELS = {
     "character": CharacterDraft,
     "organisation": OrganisationDraft,
     "item": ItemDraft,
+    "family": FamilyDraft,
+    "quest": QuestDraft,
+    "map": MapDraft,
+    "journal": JournalDraft,
+    "note": NoteDraft,
+    "location": LocationDraft,
+    "post": EntityPostDraft,
+}
+CREATION_ENDPOINTS = {
+    kind: "families" if kind == "family" else kind + "s" for kind in DRAFT_MODELS
+}
+LORE_REFERENCE_FIELDS = {
+    "tag_entity_ids": ("tags", "tag"),
+    "location_entity_ids": ("locations", "location"),
+    "location_entity_id": ("location_id", "location"),
+    "author_entity_id": ("author_id", None),
+    "instigator_entity_id": ("instigator_id", None),
+    "parent_entity_id": ("parent_id", None),
 }
 
 
@@ -153,10 +274,19 @@ def validate_creation_draft(draft: CreationDraft) -> CreationDraft:
 
 def referenced_entities(draft: CreationDraft) -> list[tuple[int, str | None]]:
     """List universal references and required module types (None allows any type)."""
+    if isinstance(draft, EntityPostDraft):
+        return [(draft.entity_id, None)]
     if isinstance(draft, OrganisationDraft):
         return [(member.character_entity_id, "character") for member in draft.members]
     if isinstance(draft, ItemDraft):
         return []
+    if isinstance(draft, LoreDraft):
+        return [
+            (uid, creation_kind(draft) if field == "parent_entity_id" else expected)
+            for field, (_body_field, expected) in LORE_REFERENCE_FIELDS.items()
+            if (value := getattr(draft, field, None)) is not None
+            for uid in (value if isinstance(value, tuple) else (value,))
+        ]
     return (
         [(relation.target_id, None) for relation in draft.relations]
         + [(item.item_entity_id, "item") for item in draft.inventory]
@@ -209,9 +339,25 @@ def preview_creation(draft: CreationDraft) -> dict[str, Any]:
             "price",
             "size",
             "weight",
+            "date",
+            "is_real",
+            "title",
+            "entity_id",
+            "visibility_id",
         },
         exclude_none=True,
     )
+    if isinstance(draft, LoreDraft):
+        for field, (body_field, expected) in LORE_REFERENCE_FIELDS.items():
+            value = getattr(draft, field, None)
+            if value is None or value == ():
+                continue
+            values = value if isinstance(value, tuple) else (value,)
+            resolved = [
+                uid if expected is None else f"{{{expected}_child_id:{uid}}}"
+                for uid in values
+            ]
+            core[body_field] = resolved if isinstance(value, tuple) else resolved[0]
     if isinstance(draft, CharacterDraft):
         for field_name, references, module in (
             ("races", draft.race_entity_ids, "race"),
@@ -226,7 +372,11 @@ def preview_creation(draft: CreationDraft) -> dict[str, Any]:
             "key": kind,
             "operation": kind + ".create",
             "method": "POST",
-            "path": base + f"/{kind}s",
+            "path": (
+                f"{base}/entities/{draft.entity_id}/posts"
+                if isinstance(draft, EntityPostDraft)
+                else base + f"/{CREATION_ENDPOINTS[kind]}"
+            ),
             "body": core,
         }
     ]
@@ -314,6 +464,19 @@ def resolve_creation_request(
     if operation is None:
         raise ValueError("Unknown creation step")
     path, body = operation["path"], dict(operation["body"])
+    if isinstance(draft, LoreDraft):
+        for field, (body_field, expected) in LORE_REFERENCE_FIELDS.items():
+            value = getattr(draft, field, None)
+            if value is None or value == ():
+                continue
+            values = value if isinstance(value, tuple) else (value,)
+            resolved = [
+                uid if expected is None else (module_ids or {}).get(uid)
+                for uid in values
+            ]
+            if any(type(uid) is not int or uid <= 0 for uid in resolved):
+                raise ValueError("Lore references require resolved positive module IDs")
+            body[body_field] = resolved if isinstance(value, tuple) else resolved[0]
     if key.startswith("member:"):
         if type(child_id) is not int or child_id <= 0:
             raise ValueError("Membership requires a resolved organisation module ID")

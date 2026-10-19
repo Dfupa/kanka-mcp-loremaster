@@ -6,18 +6,24 @@ inventory and explicit relationships. A full-entity tool combines supported dire
 attachments with per-section provenance. Python 3.13 or newer is required.
 
 The current MVP uses local **stdio** transport. It is read-only by default.
-Optional supervised entity creation requires explicit local configuration and
-a separate terminal approval. Editing, transfers and deletion are not supported.
+Optional supervised creation and character/attachment editing require explicit
+local configuration and separate terminal approval. Scoped live trials verified
+character-core edits, post text, inventory quantity, a relationship label, tag
+assignment replacement and an existing species' description.
+Transfers and deletion are not supported.
 
 ## Install
 
-Install from `main` for the merged character-creation baseline. Organization and
-item creation are being developed on `feat/supervised-item-creation`; check out
-that branch before installation to evaluate the extensions:
+`main` includes merged character, organization/member and item creation. The
+`feat/supervised-editing` branch adds supervised editing plus family, quest, map,
+journal and note creation/editing, location creation, standalone posts and child
+quests/notes. These additions are submitted for review before merging to `main`.
+To try this review branch, check it out before installing:
 
 ```bash
 git clone https://github.com/Dfupa/kanka-mcp-loremaster.git
 cd kanka-mcp-loremaster
+git switch feat/supervised-editing
 python3.13 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e '.[dev]'
@@ -272,22 +278,30 @@ must be within `KANKA_ALLOWED_CAMPAIGN_IDS` when that read allowlist is configur
 Narrow the operation list to what you actually permit. Kanka permissions still
 apply; no subscription tiers are hardcoded.
 
-Six tools are added (fourteen tools total):
+Thirteen tools are added (twenty-one tools total):
 
 | Tool | Behavior |
 | --- | --- |
 | `prepare_character_creation` | Accept campaign, name, HTML `entry`, privacy and optional relation/inventory/post lists; resolve references and store an immutable preview without POSTs |
 | `prepare_organisation_creation` | Preview an organization and optional memberships of existing characters, without POSTs |
 | `prepare_item_creation` | Preview an item with optional type, price, size and weight text, without POSTs |
+| `prepare_family_creation` | Preview a typed family draft with tags and locations |
+| `prepare_location_creation` | Preview a location with optional title, type and tags |
+| `prepare_entity_post_creation` | Preview a post on an existing entity using a typed draft with owner ID and visibility |
+| `prepare_quest_creation` | Preview a typed mission/quest draft with tags, locations and an optional instigator |
+| `prepare_map_creation` | Preview map metadata with tags, location and real-world mode; no image upload |
+| `prepare_journal_creation` | Preview a diary/session journal with tags, locations, author and literal date |
+| `prepare_note_creation` | Preview a standalone note with optional tags |
 | `execute_creation` | Consume a local approval for the stored typed proposal and verify read-back |
-| `execute_character_creation` | Compatible character-only execution alias; rejects organization/item proposals |
+| `execute_character_creation` | Compatible character-only execution alias; rejects other entity types |
 | `get_creation_status` | Return scoped local status, confirmed IDs and per-step outcomes without sending writes |
 
 Relation `target_id` and inventory `item_entity_id` are universal IDs of existing
 entities; item module IDs are resolved by the backend. Character privacy defaults
 to private, relations/posts to admin visibility. **Inventory entry privacy uses
 Kanka's default and is not configurable in this slice.** Review those consequences
-before approving. Each proposal creates one core entity; create dependencies in
+before approving. Core proposals create one entity; standalone post proposals add
+one post to an existing owner. Create dependencies in
 separately approved proposals and use their returned IDs in later proposals.
 
 Optional `age` and `sex` are text fields. `race_entity_ids` (species) and
@@ -387,6 +401,83 @@ complete mocked stdio scenario creates a mentor, compass item, Éldan with
 attachments, and an organization with both characters as members, using ten
 mocked POSTs and separate approvals. Test fixtures are excluded from the installed
 package. Campaign-specific one-off live helpers are not release files.
+
+### Supervised character and attachment editing
+
+On `feat/supervised-editing`, the same explicit private database/campaign settings
+can enable update operations through `KANKA_WRITE_OPERATIONS`. Creation permissions
+never grant editing permissions. Enabling any update class adds thirteen edit tools;
+normal opt-in startup then has thirty-four tools. Default startup remains read-only.
+
+| Tool | Editable fields | Operation class |
+| --- | --- | --- |
+| `prepare_character_edit` | Name, HTML description, text age/sex, species/location/family/tag assignment lists | `character.update` |
+| `prepare_species_edit` | One existing species' description only | `race.update` |
+| `prepare_family_edit` | Family name/description/type/tags/locations | `family.update` |
+| `prepare_quest_edit` | Mission name/description/type/tags/locations/instigator | `quest.update` |
+| `prepare_map_edit` | Map name/description/type/tags/location/real-world mode | `map.update` |
+| `prepare_journal_edit` | Diary name/description/type/tags/locations/author/date | `journal.update` |
+| `prepare_note_edit` | Standalone note name/description/type/tags | `note.update` |
+| `prepare_post_edit` | One identified post's name/HTML on any verified owner entity | `post.update` |
+| `prepare_inventory_edit` | One identified entry's quantity, equipment, position or item link | `inventory.update` |
+| `prepare_relation_edit` | One outgoing edge's label, attitude, pin, colour or target | `relation.update` |
+| `prepare_tag_edit` | Replace one identified tag assignment | `tag.update` |
+| `execute_edit` | Execute only a stored, locally approved diff | The proposal's update class |
+| `get_edit_status` | Local status and uncertainty, without mutation | Configured edit scope |
+
+Preparation requires `campaign_id`, the character's universal `entity_id`, a typed
+`changes` object and, for an attachment, its exact record ID. Species/location/tag
+and item references also use universal IDs; verified module IDs are resolved by
+the backend. Species/location/tag lists explicitly replace assignments, with `[]`
+meaning clear. Omitted fields remain unchanged; null/blank text and no-op edits
+are rejected. Tag assignment edits do not rename a shared campaign tag.
+Species description editing instead takes the species' universal `entity_id`;
+the backend verifies its type and resolves the race module ID. Inventory PATCHes
+include the unchanged owner, item/name and amount when required by Kanka; the
+reviewed diff separates actual changes from these preserved fields.
+
+For example, the core changes object can be:
+
+```json
+{"age": "29", "entry": "<p>Revised description.</p>"}
+```
+
+Review and approve the resulting proposal through the separate local terminal:
+
+```bash
+kanka-loremaster-approve --database /absolute/private/changes.sqlite3 --kind edit review PROPOSAL_ID
+kanka-loremaster-approve --database /absolute/private/changes.sqlite3 --kind edit approve PROPOSAL_ID
+```
+
+Then call `execute_edit` with campaign/proposal IDs. The backend re-reads the exact
+baseline and rejects intervening changes, journals intent before the single PATCH,
+and independently verifies the result and retained guard fields. Uncertain writes
+block further edits to that character; local GET-only reconciliation and explicit
+origin review are required. A confirmed write with failed verification cannot be
+resent. A pre-send GET is not an upstream atomic lock: another client can still
+write between that read and PATCH. See [editing](docs/supervised-editing.md) for
+scope, IDs, recovery and tested limitations. One separately authorized live
+character-core trial verified a rename, age/sex and species/tag additions from
+empty lists, with preservation of untouched core fields and public visibility.
+A follow-up trial verified post text, inventory quantity, an outgoing relationship
+label, replacement of one existing tag assignment and a species description.
+Kanka wrapped the requested plain descriptions in a paragraph; verification
+accepts that exact wrapper while preserving checks on untouched fields. Inventory
+updates include required preserved identity fields. Tag responses that omit the
+assignment ID require corroboration from the fully paginated assignment list.
+Collection clearing, transfers and other update combinations remain unverified
+live. This evidence covers one account/campaign and does not grant further writes.
+
+The additional family, quest, map, journal and note editing paths are
+**offline-validated only**. A subsequent authorized live creation trial verified
+location/family/quest/journal/note records, quest-instigator and journal-author
+references, and a real character-family assignment. Map creation remains offline
+only. Each type has separate operation scope and reuses local approval,
+durable intent and read-back. Their creation tools take a typed `draft` object;
+editing takes the target's universal ID and typed `changes`. See
+[supported fields, examples and test scope](docs/additional-entities.md).
+Family trees, quest elements, map images/markers/layers and calendar configuration
+remain outside these core metadata contracts.
 
 ## Limits and next milestones
 

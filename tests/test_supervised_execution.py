@@ -227,7 +227,7 @@ async def test_mcp_proposal_local_approval_execution_and_status(service):
     creator, api = service
     server = create_server(creator.reader, creator)
     tools = await server.list_tools()
-    assert len(tools) == 14
+    assert len(tools) == 21
     assert not any("approve" in tool.name or "revoke" in tool.name for tool in tools)
     draft = offline.example_draft()
     prepared = await server.call_tool(

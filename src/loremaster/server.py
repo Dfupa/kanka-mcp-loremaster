@@ -1,4 +1,4 @@
-"""Kanka lore reads and explicitly configured supervised creation tools."""
+"""Kanka lore reads and explicitly configured supervised creation/edit tools."""
 
 import asyncio
 import json
@@ -18,15 +18,43 @@ from loremaster.aggregate import EntitySection
 from loremaster.aggregate import get_entity_full as read_entity_full
 from loremaster.approvals import LocalApprovals
 from loremaster.creation import (
+    CREATION_ENDPOINTS,
     CharacterDraft,
     CreationScope,
+    EntityPostDraft,
+    FamilyDraft,
     InventoryDraft,
     ItemDraft,
+    JournalDraft,
+    LocationDraft,
+    LoreDraft,
+    MapDraft,
+    NoteDraft,
     OrganisationDraft,
     OrganisationMemberDraft,
     PostDraft,
+    QuestDraft,
     RelationDraft,
+    creation_kind,
 )
+from loremaster.edit_models import (
+    EDIT_OPERATIONS,
+    CharacterChanges,
+    EditDraft,
+    EditKind,
+    FamilyChanges,
+    InventoryChanges,
+    JournalChanges,
+    MapChanges,
+    NoteChanges,
+    PostChanges,
+    QuestChanges,
+    RelationChanges,
+    SpeciesChanges,
+    TagChanges,
+)
+from loremaster.edit_store import EditStore
+from loremaster.editing import EditService
 from loremaster.execution import CreationService
 from loremaster.kanka import API_BASE_URL, KankaClient, KankaError
 from loremaster.results import ToolResult
@@ -42,9 +70,11 @@ READ_ONLY = ToolAnnotations(
 
 
 def create_server(
-    client: KankaClient, creation: CreationService | None = None
+    client: KankaClient,
+    creation: CreationService | None = None,
+    editing: EditService | None = None,
 ) -> FastMCP:
-    """Bind reads plus explicitly injected supervised creation; close owned clients."""
+    """Bind reads and explicitly injected writers; close all owned clients."""
 
     @asynccontextmanager
     async def lifespan(_server: FastMCP) -> AsyncIterator[None]:
@@ -52,8 +82,12 @@ def create_server(
             yield
         finally:
             try:
-                if creation is not None:
-                    await creation.aclose()
+                try:
+                    if editing is not None:
+                        await editing.aclose()
+                finally:
+                    if creation is not None:
+                        await creation.aclose()
             finally:
                 await client.aclose()
 
@@ -62,11 +96,11 @@ def create_server(
         lifespan=lifespan,
         instructions=(
             (
-                "Kanka librarian with opt-in supervised creation. Approval is issued "
+                "Kanka librarian with opt-in supervised writes. Approval is issued "
                 "only by the local host command, never by a tool or chat assertion. "
                 "Prepare proposals, wait for local approval, then execute. Inspect "
-                "creation status after failures; never blindly retry uncertain writes. "
-                if creation is not None
+                "creation/edit status after failures; never retry uncertain writes. "
+                if creation is not None or editing is not None
                 else "Read-only Kanka librarian. "
             )
             + "Select a campaign explicitly; ask when "
@@ -139,7 +173,7 @@ def create_server(
         except TimeoutError:
             result["error"] = {
                 "code": "operation_timeout",
-                "message": "Operation timed out; inspect creation status if applicable",
+                "message": "Operation timed out; inspect write status if applicable",
                 "status_code": None,
             }
         except (ValueError, PermissionError) as error:
@@ -153,7 +187,7 @@ def create_server(
         except sqlite3.Error:
             result["error"] = {
                 "code": "storage_error",
-                "message": "Local creation storage is unavailable",
+                "message": "Local proposal storage is unavailable",
                 "status_code": None,
             }
         serialized = json.dumps(result, ensure_ascii=False)
@@ -435,6 +469,82 @@ def create_server(
             )
 
         @server.tool(annotations=creation_annotations)
+        async def prepare_entity_post_creation(draft: EntityPostDraft) -> ToolResponse:
+            """Preview one post on an existing entity; requires post.create scope.
+
+            entity_id is universal. Visibility defaults to admin-only (3); use 1
+            explicitly for public. Execution needs separate local approval. This
+            creates a Posts-tab record, not an entity description or child entity.
+            """
+            return await read(
+                lambda: creation.prepare(draft),
+                f"campaigns/{draft.campaign_id}/entities/{draft.entity_id}/posts",
+                campaign_id=draft.campaign_id,
+                entity_id=draft.entity_id,
+            )
+
+        async def prepare_lore_creation(draft: LoreDraft) -> ToolResponse:
+            return await read(
+                lambda: creation.prepare(draft),
+                f"campaigns/{draft.campaign_id}/{CREATION_ENDPOINTS[creation_kind(draft)]}",
+                campaign_id=draft.campaign_id,
+            )
+
+        @server.tool(annotations=creation_annotations)
+        async def prepare_location_creation(draft: LocationDraft) -> ToolResponse:
+            """Preview a location with name, description, type, title and tags.
+
+            Private by default; requires location.create and local approval.
+            Tag references use universal IDs resolved by the backend.
+            """
+            return await prepare_lore_creation(draft)
+
+        @server.tool(annotations=creation_annotations)
+        async def prepare_family_creation(draft: FamilyDraft) -> ToolResponse:
+            """Preview a family record with verified tags/locations; no family tree.
+
+            Private by default. Requires family.create and separate local approval.
+            Reference IDs are universal; the backend resolves module IDs.
+            """
+            return await prepare_lore_creation(draft)
+
+        @server.tool(annotations=creation_annotations)
+        async def prepare_quest_creation(draft: QuestDraft) -> ToolResponse:
+            """Preview a mission/quest, not quest elements; requires quest.create.
+
+            Instigator is universal; tags/locations resolve to module IDs.
+            Private by default; execution needs separate local approval.
+            """
+            return await prepare_lore_creation(draft)
+
+        @server.tool(annotations=creation_annotations)
+        async def prepare_map_creation(draft: MapDraft) -> ToolResponse:
+            """Preview map metadata; no image upload, markers, groups or layers.
+
+            Requires map.create and local approval. Location/tags use universal
+            IDs resolved by the backend. Private and non-real-world by default.
+            """
+            return await prepare_lore_creation(draft)
+
+        @server.tool(annotations=creation_annotations)
+        async def prepare_journal_creation(draft: JournalDraft) -> ToolResponse:
+            """Preview a diary/session journal, separate from a note or post.
+
+            Requires journal.create and local approval. Author is universal;
+            dates remain literal text without fantasy-calendar conversion.
+            """
+            return await prepare_lore_creation(draft)
+
+        @server.tool(annotations=creation_annotations)
+        async def prepare_note_creation(draft: NoteDraft) -> ToolResponse:
+            """Preview a standalone note; requires note.create and local approval.
+
+            Private by default; tags use verified universal references.
+            This creates a note entity, not a post on another entity.
+            """
+            return await prepare_lore_creation(draft)
+
+        @server.tool(annotations=creation_annotations)
         async def execute_creation(
             campaign_id: PositiveID, proposal_id: str
         ) -> ToolResponse:
@@ -486,6 +596,251 @@ def create_server(
 
             return await read(
                 status, f"campaigns/{campaign_id}/characters", campaign_id=campaign_id
+            )
+
+    if editing is not None:
+        edit_annotations = ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=False,
+            openWorldHint=True,
+        )
+        preparation_annotations = ToolAnnotations(
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=True,
+        )
+
+        async def prepare_edit(
+            campaign_id: int,
+            entity_id: int,
+            kind: EditKind,
+            changes: dict[str, Any],
+            record_id: int | None = None,
+        ) -> ToolResponse:
+            async def prepare():
+                return await editing.prepare(
+                    EditDraft(
+                        campaign_id=campaign_id,
+                        entity_id=entity_id,
+                        kind=kind,
+                        record_id=record_id,
+                        changes=changes,
+                    )
+                )
+
+            return await read(
+                prepare,
+                f"campaigns/{campaign_id}/entities/{entity_id}",
+                campaign_id=campaign_id,
+                entity_id=entity_id,
+            )
+
+        @server.tool(annotations=preparation_annotations)
+        async def prepare_character_edit(
+            campaign_id: PositiveID,
+            entity_id: PositiveID,
+            changes: CharacterChanges,
+        ) -> ToolResponse:
+            """Preview explicit character fields; send no PATCH.
+
+            Species/location/family/tag lists use universal IDs and explicitly replace
+            those assignments, including clearing with []. Omitted fields stay
+            unchanged. Preserve HTML; review the exact diff in the local CLI.
+            """
+            return await prepare_edit(
+                campaign_id,
+                entity_id,
+                "character",
+                changes.model_dump(exclude_unset=True),
+            )
+
+        @server.tool(annotations=preparation_annotations)
+        async def prepare_species_edit(
+            campaign_id: PositiveID,
+            entity_id: PositiveID,
+            changes: SpeciesChanges,
+        ) -> ToolResponse:
+            """Preview a species description edit using its universal entity ID.
+
+            Requires race.update and separate local approval. Names, hierarchy,
+            references and privacy stay guarded; this edits the species itself.
+            """
+            return await prepare_edit(
+                campaign_id, entity_id, "race", changes.model_dump(exclude_unset=True)
+            )
+
+        @server.tool(annotations=preparation_annotations)
+        async def prepare_family_edit(
+            campaign_id: PositiveID, entity_id: PositiveID, changes: FamilyChanges
+        ) -> ToolResponse:
+            """Preview family metadata changes; members, tree and privacy are guarded.
+
+            Requires family.update. Tags/locations use universal IDs; lists replace
+            assignments explicitly, including []. Local approval is separate.
+            """
+            return await prepare_edit(
+                campaign_id, entity_id, "family", changes.model_dump(exclude_unset=True)
+            )
+
+        @server.tool(annotations=preparation_annotations)
+        async def prepare_quest_edit(
+            campaign_id: PositiveID, entity_id: PositiveID, changes: QuestChanges
+        ) -> ToolResponse:
+            """Preview mission metadata; quest elements and privacy stay guarded.
+
+            Requires quest.update and local approval. Instigator is universal;
+            tags/locations resolve module IDs and explicitly replace lists.
+            """
+            return await prepare_edit(
+                campaign_id, entity_id, "quest", changes.model_dump(exclude_unset=True)
+            )
+
+        @server.tool(annotations=preparation_annotations)
+        async def prepare_map_edit(
+            campaign_id: PositiveID, entity_id: PositiveID, changes: MapChanges
+        ) -> ToolResponse:
+            """Preview map metadata; image, dimensions, layers/groups stay guarded.
+
+            Requires map.update and separate local approval. Reference IDs are
+            universal. This tool cannot upload an image or modify map markers.
+            """
+            return await prepare_edit(
+                campaign_id, entity_id, "map", changes.model_dump(exclude_unset=True)
+            )
+
+        @server.tool(annotations=preparation_annotations)
+        async def prepare_journal_edit(
+            campaign_id: PositiveID, entity_id: PositiveID, changes: JournalChanges
+        ) -> ToolResponse:
+            """Preview diary text, author/date or reference assignment changes.
+
+            Requires journal.update and local approval. Dates remain literal;
+            existing fantasy-calendar fields and privacy stay guarded.
+            """
+            return await prepare_edit(
+                campaign_id,
+                entity_id,
+                "journal",
+                changes.model_dump(exclude_unset=True),
+            )
+
+        @server.tool(annotations=preparation_annotations)
+        async def prepare_note_edit(
+            campaign_id: PositiveID, entity_id: PositiveID, changes: NoteChanges
+        ) -> ToolResponse:
+            """Preview standalone note metadata, not a post or diary.
+
+            Requires note.update and local approval. Null/blank text is rejected;
+            tags explicitly replace assignments. Visibility stays unchanged.
+            """
+            return await prepare_edit(
+                campaign_id, entity_id, "note", changes.model_dump(exclude_unset=True)
+            )
+
+        @server.tool(annotations=preparation_annotations)
+        async def prepare_post_edit(
+            campaign_id: PositiveID,
+            entity_id: PositiveID,
+            post_id: PositiveID,
+            changes: PostChanges,
+        ) -> ToolResponse:
+            """Preview title/HTML edits to an exact post on a verified entity."""
+            return await prepare_edit(
+                campaign_id,
+                entity_id,
+                "post",
+                changes.model_dump(exclude_unset=True),
+                post_id,
+            )
+
+        @server.tool(annotations=preparation_annotations)
+        async def prepare_inventory_edit(
+            campaign_id: PositiveID,
+            entity_id: PositiveID,
+            inventory_id: PositiveID,
+            changes: InventoryChanges,
+        ) -> ToolResponse:
+            """Preview one inventory entry's amount/equipment/position/item link.
+
+            inventory_id is the attachment record ID. item_entity_id is universal.
+            This does not transfer ownership, create entries or delete anything.
+            """
+            return await prepare_edit(
+                campaign_id,
+                entity_id,
+                "inventory",
+                changes.model_dump(exclude_unset=True),
+                inventory_id,
+            )
+
+        @server.tool(annotations=preparation_annotations)
+        async def prepare_relation_edit(
+            campaign_id: PositiveID,
+            entity_id: PositiveID,
+            relation_id: PositiveID,
+            changes: RelationChanges,
+        ) -> ToolResponse:
+            """Preview edits to an exact outgoing edge; incoming edges are rejected.
+
+            Target changes use a universal target_entity_id. Owner/mirroring and
+            visibility cannot be changed. A target ID cannot replace relation_id.
+            """
+            return await prepare_edit(
+                campaign_id,
+                entity_id,
+                "relation",
+                changes.model_dump(exclude_unset=True),
+                relation_id,
+            )
+
+        @server.tool(annotations=preparation_annotations)
+        async def prepare_tag_edit(
+            campaign_id: PositiveID,
+            entity_id: PositiveID,
+            entity_tag_id: PositiveID,
+            changes: TagChanges,
+        ) -> ToolResponse:
+            """Preview replacing one tag assignment, not renaming a shared tag.
+
+            entity_tag_id identifies the assignment; tag_entity_id is universal.
+            """
+            return await prepare_edit(
+                campaign_id,
+                entity_id,
+                "tag",
+                changes.model_dump(exclude_unset=True),
+                entity_tag_id,
+            )
+
+        @server.tool(annotations=edit_annotations)
+        async def execute_edit(
+            campaign_id: PositiveID, proposal_id: str
+        ) -> ToolResponse:
+            """Execute only a stored, locally approved edit; reject stale baselines.
+
+            No approval flag, arbitrary path or body is accepted. Inspect status
+            after a failure; uncertain PATCH outcomes must never be blindly retried.
+            """
+            return await read(
+                lambda: editing.execute(campaign_id, proposal_id),
+                f"campaigns/{campaign_id}/entities",
+                campaign_id=campaign_id,
+                mutation=True,
+            )
+
+        @server.tool(annotations=READ_ONLY)
+        async def get_edit_status(
+            campaign_id: PositiveID, proposal_id: str
+        ) -> ToolResponse:
+            """Read local edit status and uncertainty without sending a PATCH."""
+
+            async def status():
+                return editing.status(campaign_id, proposal_id)
+
+            return await read(
+                status, f"campaigns/{campaign_id}/entities", campaign_id=campaign_id
             )
 
     return server
@@ -547,10 +902,16 @@ def main() -> None:
         raise ValueError("Write campaigns must be within the read campaign allowlist")
     client = KankaClient(token, allowed_campaign_ids=allowed)
     creation = None
+    editing = None
     if settings is not None:
         path, scope = settings
         creation = CreationService(client, token, LocalApprovals(path), scope)
-    create_server(client, creation).run(transport="stdio")
+        edit_operations = scope.operations & EDIT_OPERATIONS
+        if edit_operations:
+            editing = EditService(
+                client, token, EditStore(path), scope.campaign_ids, edit_operations
+            )
+    create_server(client, creation, editing).run(transport="stdio")
 
 
 if __name__ == "__main__":

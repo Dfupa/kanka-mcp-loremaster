@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from loremaster.creation import (
+    DRAFT_MODELS,
     ApprovedCreation,
     creation_kind,
     resolve_creation_request,
@@ -287,10 +288,7 @@ class CreationJournal:
         identity = self._identity(result, row["key"])
         if not matches_creation_fields(row["body"], result):
             raise ValueError("Reconciled record differs from the pending request")
-        if (
-            row["key"] in ("character", "organisation", "item")
-            and "entity_id" not in identity
-        ):
+        if row["key"] in DRAFT_MODELS and "entity_id" not in identity:
             raise ValueError("Reconciled character/core lacks its universal entity ID")
         with self._db:
             cursor = self._db.execute(

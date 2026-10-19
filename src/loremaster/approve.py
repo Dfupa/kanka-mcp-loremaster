@@ -1,4 +1,4 @@
-"""Review/approve/revoke local proposals. Never register these as MCP tools."""
+"""Review/approve/revoke creation or edit proposals; never expose this via MCP."""
 
 import argparse
 import asyncio
@@ -10,8 +10,50 @@ import sys
 from pathlib import Path
 
 from loremaster.approvals import LocalApprovals
+from loremaster.edit_models import EDIT_OPERATIONS
+from loremaster.edit_store import EditStore
+from loremaster.editing import EditService
 from loremaster.execution import CreationService
 from loremaster.kanka import KankaClient, KankaError
+
+
+async def reconcile_edit(store: EditStore, database: Path, proposal_id: str) -> None:
+    """Review GET-only evidence for the stored edit's exact uncertain target."""
+    from loremaster.server import creation_settings
+
+    settings = creation_settings()
+    token = os.environ.get("KANKA_API_TOKEN", "").strip()
+    if settings is None or settings[0] != database or not token:
+        raise ValueError("Reconciliation needs matching write configuration and token")
+    _path, scope = settings
+    if not scope.operations & EDIT_OPERATIONS:
+        raise ValueError("Reconciliation requires explicit edit operation scope")
+    allowed_raw = os.environ.get("KANKA_ALLOWED_CAMPAIGN_IDS", "").strip()
+    allowed = (
+        frozenset(int(part.strip()) for part in allowed_raw.split(","))
+        if allowed_raw
+        else scope.campaign_ids
+    )
+    reader = KankaClient(token, allowed_campaign_ids=allowed)
+    service = EditService(
+        reader, token, store, scope.campaign_ids, scope.operations & EDIT_OPERATIONS
+    )
+    try:
+        campaign_id = store.review(proposal_id)["plan"]["draft"]["campaign_id"]
+        evidence = await service.inspect_reconciliation(campaign_id, proposal_id)
+        print(json.dumps(evidence, ensure_ascii=False, indent=2))
+        print("Stop all editing workers and verify the record's origin.")
+        phrase = f"reconcile {proposal_id} {evidence['fingerprint']}"
+        print(f"To record this matching evidence, type: {phrase}")
+        if input("> ").strip() != phrase:
+            raise SystemExit("Reconciliation cancelled")
+        store.confirm_reconciled(
+            proposal_id, evidence["fingerprint"], getpass.getuser()
+        )
+        print("Reconciliation recorded; fresh approval permits read-back only")
+    finally:
+        await service._writer.aclose()
+        await reader.aclose()
 
 
 async def reconcile(
@@ -65,6 +107,7 @@ def main() -> None:
     parser.add_argument("action", choices=("review", "approve", "revoke", "reconcile"))
     parser.add_argument("proposal_id")
     parser.add_argument("--candidate-id", type=int)
+    parser.add_argument("--kind", choices=("creation", "edit"), default="creation")
     args = parser.parse_args()
     if not args.database.is_absolute() or not args.database.exists():
         raise SystemExit("Select the existing absolute private creation database")
@@ -72,9 +115,18 @@ def main() -> None:
         raise SystemExit("Approval requires an interactive local terminal")
     store = None
     try:
-        store = LocalApprovals(args.database)
+        if args.kind == "edit" and args.candidate_id is not None:
+            raise ValueError("An edit can reconcile only its stored target")
+        store = (
+            EditStore(args.database)
+            if args.kind == "edit"
+            else LocalApprovals(args.database)
+        )
         review = store.review(args.proposal_id)
         if args.action == "reconcile":
+            if args.kind == "edit":
+                asyncio.run(reconcile_edit(store, args.database, args.proposal_id))
+                return
             if args.candidate_id is None:
                 raise ValueError("Reconciliation requires an explicit candidate ID")
             asyncio.run(
@@ -88,7 +140,7 @@ def main() -> None:
         print(json.dumps(review, ensure_ascii=False, indent=2))
         if args.action == "approve":
             phrase = f"approve {args.proposal_id} {review['review_digest']}"
-            print("Stop other creation workers before reapproving a partial run.")
+            print("Stop other write workers before reapproving a partial run.")
             print(f"To authorize exactly this proposal, type: {phrase}")
             if input("> ").strip() != phrase:
                 raise SystemExit("Approval cancelled")
