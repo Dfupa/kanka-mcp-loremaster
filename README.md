@@ -10,10 +10,10 @@ there are no creation, editing, transfer, or deletion tools.
 
 ## Install
 
-The implementation currently lives on the development branch:
+Install the merged read-only MVP from `main`:
 
 ```bash
-git clone --branch feat/read-only-foundation https://github.com/Dfupa/kanka-mcp-loremaster.git
+git clone https://github.com/Dfupa/kanka-mcp-loremaster.git
 cd kanka-mcp-loremaster
 python3.13 -m venv .venv
 source .venv/bin/activate
@@ -252,25 +252,44 @@ two private test posts. Review its ordered request preview:
 python scripts/offline_creation.py
 ```
 
-Copy the returned `approval_digest`, then run:
+Copy the returned `content_digest`, then run:
 
 ```bash
 python scripts/offline_creation.py --approve YOUR_PREVIEW_DIGEST
 ```
 
 Both HTTP clients use an in-memory `httpx.MockTransport`; the script has no live
-transport option and never reads an API token. It checks the exact approval and
-synthetic campaign, resolves universal versus module IDs, executes five mocked
-POSTs, and reads back through `get_entity_full` to compare stored fields to the
-approved draft. Exiting discards all synthetic data, so no cleanup writes occur.
+transport option and never reads an API token. The CLI acts as the trusted
+reviewer: it validates the reviewed checksum, obtains a backend-issued grant and
+claims the server-stored draft. It then resolves universal versus module IDs,
+executes five mocked POSTs, and reads back through `get_entity_full` to compare
+stored fields to the draft. Exiting discards synthetic data; no cleanup writes occur.
+
+The shared `loremaster.creation` module separates a content checksum from an
+execution capability. Its `ApprovalGate` denies campaigns and operation classes
+unless explicitly permitted. Grants are random, bound to a stored proposal,
+single-use, revocable and valid only until the proposal's deadline (five minutes
+by default). Current scope and expiry are checked at approval, claim and before
+each simulated POST. A preview never contains an execution token. The module has
+no network executor and its approval methods are not exposed through MCP.
+
+Python callers must migrate from `run(draft, approval_digest)` to
+`prepare(draft)` → trusted-host `gate.approve(...)` → `run(grant)`. Approval audit
+metadata identifies the proposal, content checksum and reviewer. The host must
+authenticate that reviewer; an `approved_by` string is audit data, not login.
 
 Tests exercise invalid drafts/references, duplicate names, rejected writes,
-partial completion, same-instance retries without duplicates, and read-back
-mismatches. Lost responses and 5xx block blind retry pending reconciliation.
+partial completion, concurrent claims, expiry, revocation, scope changes and
+same-instance retries without duplicates. Resuming a rejected step requires a
+new proposal/grant and verifies completed data before further writes. Changed
+completed data, lost/malformed responses, cancellation during send, unexpected
+redirects and ambiguous HTTP failures block continuation pending reconciliation.
 The progress journal exists only within a rehearsal instance: this is not
 production authorization, durable idempotency or evidence of live write support.
 Inventory visibility parameters require live contract verification before a
 real adapter is implemented (the API docs contain a misspelled parameter).
+See [the supervised-creation contract](docs/supervised-creation.md) for the trust
+boundary and remaining recovery work.
 
 ## Limits and next milestones
 

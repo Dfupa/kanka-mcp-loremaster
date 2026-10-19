@@ -3,127 +3,29 @@
 Run without arguments to review a synthetic proposal, then --approve DIGEST to
 execute it against an in-memory HTTPX MockTransport. No token/environment reads,
 real requests, persistence, automatic rollback or deletion are possible here.
-This rehearses sequencing and failure handling, not production authorization.
+The CLI is the trusted approval caller for this offline scenario. A content
+checksum is not an execution grant; no model-callable approval tool exists.
 """
 
 import argparse
 import asyncio
-import hashlib
 import json
-from typing import Annotated, Any
+from typing import Any
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from loremaster.aggregate import get_entity_full
+from loremaster.creation import (
+    ApprovalGate,
+    ApprovalGrant,
+    CharacterDraft,
+    CreationScope,
+    InventoryDraft,
+    PostDraft,
+    RelationDraft,
+    preview_creation,
+)
 from loremaster.kanka import API_BASE_URL, KankaClient, KankaError
-
-ID = Annotated[int, Field(strict=True, gt=0)]
-Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
-
-
-class DraftRecord(BaseModel):
-    """Reject unknown fields and coercions; proposals cannot be edited in place."""
-
-    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
-
-
-class RelationDraft(DraftRecord):
-    """Reference a universal target ID; only outgoing, one-way edges are supported."""
-
-    target_id: ID
-    relation: Annotated[Text, Field(max_length=255)]
-    attitude: Annotated[int, Field(ge=-100, le=100)] = 0
-    visibility_id: Annotated[int, Field(ge=1, le=5)] = 3
-
-
-class InventoryDraft(DraftRecord):
-    """Reference a universal item ID, resolved to its module ID before execution."""
-
-    item_entity_id: ID
-    amount: Annotated[int, Field(gt=0)] = 1
-    is_equipped: bool = False
-    position: str = "Pack"
-
-
-class PostDraft(DraftRecord):
-    """A named post with explicit visibility and source HTML."""
-
-    name: Text
-    entry: Text
-    visibility_id: Annotated[int, Field(ge=1, le=5)] = 3
-
-
-class CharacterDraft(DraftRecord):
-    """The narrow offline acceptance scenario; no edits or deletes are supported."""
-
-    campaign_id: ID
-    name: Text
-    entry: Text
-    is_private: bool = True
-    relations: tuple[RelationDraft, ...] = ()
-    inventory: tuple[InventoryDraft, ...] = ()
-    posts: tuple[PostDraft, ...] = ()
-
-
-def preview_creation(draft: CharacterDraft) -> dict[str, Any]:
-    """Return ordered synthetic requests and a digest binding approval to content."""
-    base = f"campaigns/{draft.campaign_id}"
-    entity = base + "/entities/{entity_id}"
-    operations = [
-        {
-            "key": "character",
-            "method": "POST",
-            "path": base + "/characters",
-            "body": draft.model_dump(include={"name", "entry", "is_private"}),
-        }
-    ]
-    for index, relation in enumerate(draft.relations):
-        operations.append(
-            {
-                "key": f"relation:{index}",
-                "method": "POST",
-                "path": entity + "/relations",
-                "body": {
-                    **relation.model_dump(),
-                    "owner_id": "{entity_id}",
-                    "two_way": False,
-                },
-            }
-        )
-    for index, item in enumerate(draft.inventory):
-        operations.append(
-            {
-                "key": f"inventory:{index}",
-                "method": "POST",
-                "path": entity + "/inventory",
-                "body": {
-                    "entity_id": "{entity_id}",
-                    "item_id": f"{{item_child_id:{item.item_entity_id}}}",
-                    "amount": str(item.amount),
-                    "is_equipped": item.is_equipped,
-                    "position": item.position,
-                },
-            }
-        )
-    for index, post in enumerate(draft.posts):
-        operations.append(
-            {
-                "key": f"post:{index}",
-                "method": "POST",
-                "path": entity + "/posts",
-                "body": {**post.model_dump(), "entity_id": "{entity_id}"},
-            }
-        )
-    proposal = {
-        "mode": "offline_only",
-        "campaign_id": draft.campaign_id,
-        "operations": operations,
-    }
-    digest = hashlib.sha256(
-        json.dumps(proposal, sort_keys=True, ensure_ascii=False).encode()
-    ).hexdigest()
-    return {**proposal, "approval_digest": digest}
 
 
 class OfflineCreation:
@@ -136,7 +38,24 @@ class OfflineCreation:
 
     campaign_id = 7
 
-    def __init__(self) -> None:
+    def __init__(self, gate: ApprovalGate | None = None) -> None:
+        self.gate = (
+            gate
+            if gate is not None
+            else ApprovalGate(
+                CreationScope(
+                    campaign_ids=frozenset({self.campaign_id}),
+                    operations=frozenset(
+                        {
+                            "character.create",
+                            "relation.create",
+                            "inventory.add",
+                            "post.create",
+                        }
+                    ),
+                )
+            )
+        )
         self.records = {
             101: {
                 "id": 11,
@@ -154,6 +73,7 @@ class OfflineCreation:
         self.attachments: dict[int, dict[str, list[dict[str, Any]]]] = {}
         self.journal: dict[str, dict[str, Any]] = {}
         self.requests: list[tuple[str, str]] = []
+        self._execution_lock = asyncio.Lock()
         self.failure: tuple[str, int] | None = None
         self.lose_response: str | None = None
         self._active_key = ""
@@ -253,16 +173,31 @@ class OfflineCreation:
             raise httpx.ReadTimeout("Synthetic lost response", request=request)
         return response(data)
 
-    async def run(self, draft: CharacterDraft, approval_digest: str) -> dict[str, Any]:
-        """Execute only an approved synthetic proposal; retain partial-step outcomes."""
-        # Revalidate even if a caller bypassed Pydantic with model_construct.
+    def prepare(self, draft: CharacterDraft) -> dict[str, Any]:
+        """Prepare a scoped synthetic proposal without approving or executing it."""
         draft = CharacterDraft.model_validate(draft.model_dump())
-        proposal = preview_creation(draft)
         if draft.campaign_id != self.campaign_id:
             raise PermissionError("Only the synthetic campaign is permitted")
-        if approval_digest != proposal["approval_digest"]:
-            raise PermissionError("Approval does not match this proposal")
-        journal = self.journal.setdefault(approval_digest, {})
+        return self.gate.prepare(draft)
+
+    async def run(self, grant: ApprovalGrant) -> dict[str, Any]:
+        """Claim a grant and execute its stored draft through MockTransport only."""
+        async with self._execution_lock:
+            return await self._run(grant)
+
+    async def _run(self, grant: ApprovalGrant) -> dict[str, Any]:
+        """Serialize rehearsal state so concurrent approvals cannot duplicate steps."""
+        approved = self.gate.claim(grant)
+        draft = approved.draft
+        if draft.campaign_id != self.campaign_id:
+            raise PermissionError("Only the synthetic campaign is permitted")
+        proposal = preview_creation(draft)
+        audit = {
+            "proposal_id": approved.proposal_id,
+            "content_digest": approved.content_digest,
+            "approved_by": approved.approved_by,
+        }
+        journal = self.journal.setdefault(approved.content_digest, {})
         if "uncertain" in journal:
             raise RuntimeError(
                 "An uncertain operation requires reconciliation before retry"
@@ -286,6 +221,35 @@ class OfflineCreation:
                 raise ValueError(
                     "Character name already exists; resolve the conflict first"
                 )
+        else:
+            current = await get_entity_full(
+                self.reader,
+                draft.campaign_id,
+                journal["character"]["entity_id"],
+                sections=["posts", "inventory", "relations"],
+            )
+            if (
+                current["entity"]["entity_type"] != "character"
+                or current["entity"]["child_id"] != journal["character"]["id"]
+            ):
+                raise KankaError(
+                    "Previously created character changed; reconcile first"
+                )
+            completed = draft.model_copy(
+                update={
+                    section: tuple(
+                        value
+                        for index, value in enumerate(getattr(draft, section))
+                        if f"{prefix}:{index}" in journal
+                    )
+                    for section, prefix in (
+                        ("relations", "relation"),
+                        ("inventory", "inventory"),
+                        ("posts", "post"),
+                    )
+                }
+            )
+            verify_created(completed, current, item_ids)
 
         for operation in proposal["operations"]:
             key = operation["key"]
@@ -293,22 +257,58 @@ class OfflineCreation:
                 continue
             entity_id = journal.get("character", {}).get("entity_id")
             path = operation["path"].replace("{entity_id}", str(entity_id))
-            body = {
-                k: entity_id if v == "{entity_id}" else v
-                for k, v in operation["body"].items()
-            }
+            body = dict(operation["body"])
+            if key != "character":
+                body["owner_id" if key.startswith("relation:") else "entity_id"] = (
+                    entity_id
+                )
             if key.startswith("inventory:"):
                 body["item_id"] = item_ids[
                     draft.inventory[int(key.split(":")[1])].item_entity_id
                 ]
             self._active_key = key
             try:
+                self.gate.check_execution(approved)
                 response = await self._writer.post(path, json=body)
-                if response.status_code >= 500:
+                if response.status_code >= 300 and response.status_code not in (
+                    400,
+                    401,
+                    403,
+                    404,
+                    409,
+                    422,
+                    429,
+                ):
                     journal["uncertain"] = key
                 response.raise_for_status()
-            except (httpx.HTTPStatusError, httpx.RequestError) as error:
-                if isinstance(error, httpx.RequestError):
+                created = response.json()["data"]
+                if (
+                    not isinstance(created, dict)
+                    or type(created.get("id")) is not int
+                    or created["id"] <= 0
+                ):
+                    raise ValueError("Invalid synthetic creation response")
+                owner_field = "owner_id" if key.startswith("relation:") else "entity_id"
+                if (
+                    type(created.get(owner_field)) is not int
+                    or created[owner_field] <= 0
+                    or (key != "character" and created[owner_field] != entity_id)
+                ):
+                    raise ValueError("Mismatched synthetic creation response")
+            except asyncio.CancelledError:
+                journal["uncertain"] = key
+                raise
+            except (
+                httpx.HTTPStatusError,
+                httpx.RequestError,
+                PermissionError,
+                ValueError,
+                KeyError,
+                TypeError,
+            ) as error:
+                if isinstance(
+                    error, (httpx.RequestError, ValueError, KeyError, TypeError)
+                ):
                     journal["uncertain"] = key
                 return {
                     "status": "uncertain"
@@ -319,9 +319,17 @@ class OfflineCreation:
                     "completed": [step for step in journal if step != "uncertain"],
                     "failed_step": key,
                     "entity_id": entity_id,
-                    "error": "Synthetic operation failed; no automatic rollback",
+                    "approval": audit,
+                    "error_code": "approval_denied"
+                    if isinstance(error, PermissionError)
+                    else "uncertain_result"
+                    if "uncertain" in journal
+                    else "upstream_rejected",
+                    "error": str(error)
+                    if isinstance(error, PermissionError)
+                    else "Synthetic operation failed; no automatic rollback",
                 }
-            journal[key] = response.json()["data"]
+            journal[key] = created
         entity_id = journal["character"]["entity_id"]
         bundle = await get_entity_full(self.reader, draft.campaign_id, entity_id)
         verify_created(draft, bundle, item_ids)
@@ -330,6 +338,7 @@ class OfflineCreation:
             "completed": list(journal),
             "entity_id": entity_id,
             "bundle": bundle,
+            "approval": audit,
         }
 
 
@@ -397,7 +406,9 @@ def example_draft() -> CharacterDraft:
 async def main() -> None:
     """Print a reviewable proposal or execute its explicit digest in memory only."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--approve", help="Exact approval_digest from the preview")
+    parser.add_argument(
+        "--approve", help="Exact content_digest from the reviewed preview"
+    )
     arguments = parser.parse_args()
     draft = example_draft()
     if arguments.approve is None:
@@ -405,7 +416,13 @@ async def main() -> None:
         return
     rehearsal = OfflineCreation()
     try:
-        result = await rehearsal.run(draft, arguments.approve)
+        proposal = rehearsal.prepare(draft)
+        grant = rehearsal.gate.approve(
+            proposal["proposal_id"],
+            reviewed_digest=arguments.approve,
+            approved_by="offline-cli-reviewer",
+        )
+        result = await rehearsal.run(grant)
         print(
             json.dumps(
                 {key: value for key, value in result.items() if key != "bundle"},

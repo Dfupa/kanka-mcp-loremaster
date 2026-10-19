@@ -16,16 +16,14 @@ The system must know the difference between **reading established lore** and
   (note this exact spelling; not `kanka-loremaster-mcp`).
 - **Owner:** `Dfupa`; **license:** MIT; **repository visibility:** PUBLIC.
 - **Default branch:** `main`.
-- **Development branch at this handoff:** `feat/read-only-foundation`.
-- **Current review:** https://github.com/Dfupa/kanka-mcp-loremaster/pull/1
-  (targeting `main`; the user has reviewed and accepted it, but will personally
-  mark it ready, merge it and delete the current branch).
-- **Next agreed branch:** `feat/supervised-creation`, created from the updated
-  remote `main` **after** the user completes the merge. Verify the actual PR and
-  branch state first; do not assume the merge or deletion has already happened,
-  create the next branch from an old `main`, or recreate the retired branch.
-- The agent's current assignment is to update and push this handoff to PR #1.
-  Leave PR readiness, merging and branch deletion to the user as requested.
+- **Active development branch:** `feat/supervised-creation`, created from merged
+  `origin/main` at `4f2524c9768a5681f704e1658500dbf7e66dd7f1`.
+- **Completed review:** https://github.com/Dfupa/kanka-mcp-loremaster/pull/1
+  was reviewed and merged by the user; the old remote development branch was
+  deleted. Do not recreate it or add work to that completed PR.
+- The current slice is the shared proposal/approval contract and offline
+  supervised-creation verification. Keep the next PR focused and in draft for
+  review; merging and live write authorization remain separate decisions.
 - Continue from the latest remote branch, not an earlier chat-generated ZIP.
 - `README.md` now documents the verified implementation, setup and limitations.
   Keep it accurate as functionality and branch setup change.
@@ -147,9 +145,9 @@ claim that files or CI results will remain unchanged.
   a safe direct-client identity verifier.
 - `.github/workflows/verify-character-lookup.yml` is now **manual dispatch only**,
   uses `scripts/verify_mcp.py`, and is restricted to the repository and
-  `feat/read-only-foundation`. Once PR #1 is merged and that branch is deleted,
-  its branch guard must be deliberately updated before using it on the next
-  branch. Do not remove secret protections or add live checks to untrusted PRs.
+  `feat/supervised-creation`. Its branch guard was updated from the retired
+  branch in this slice. Do not remove secret protections or add live checks to
+  untrusted PRs.
   GitHub dispatch also requires the workflow to exist on the default branch.
 - GitHub Actions secret `KANKA_API_TOKEN` was configured earlier by the user;
   its current presence/value is not verified by these offline jobs. Check only
@@ -160,12 +158,20 @@ claim that files or CI results will remain unchanged.
 - Local stdio is verified; a selected desktop host's configuration/UI, remote
   hosting, multi-user authentication and separate GM/player isolation are not.
 
-**Immediate priority:** finish the handoff-only PR update, then let the user mark
-PR #1 ready, merge and delete its branch. After confirming that transition,
-start `feat/supervised-creation` from the latest remote `main`. The next slice is
-supervised-creation design and offline verification; live execution still needs
-separate authorization and a designated disposable campaign. Do not restart the
-completed foundation work or assume that every planned product capability exists.
+**Active slice after PR #1:** `src/loremaster/creation.py` now owns the reusable
+drafts, previews, campaign/operation scope and process-local approval gate. A
+preview's `content_digest` is a checksum, not permission to execute. Only a trusted
+host may issue an opaque grant through `approve`; these methods are not MCP
+tools or an authenticated user interface. Grants are expiring, revocable and
+single-use, and the rehearsal checks current scope before each simulated POST.
+The CLI is the trusted caller in the network-isolated demonstration. Known
+rejections require a fresh grant to resume, and completed data is checked before
+continuation. Read `docs/supervised-creation.md` for the trust/recovery contract.
+
+PR #1's baseline evidence above remains historical. Inspect the current branch's
+exact commit and tests for new changes. The production MCP still has eight
+read-only tools. Durable recovery, host authentication and real execution remain
+unimplemented; live writes need separate consent and a disposable campaign.
 
 ### Account behavior, completeness and remaining local safeguards
 
@@ -446,9 +452,8 @@ player persona. Separate suggestions from successful persisted operations.
 This slice may precede broader canon-aware lorekeeping; implementing every
 calendar/chronology capability is not a prerequisite for the narrow creation test.
 
-1. Confirm the user's merge of PR #1, fetch the updated `origin/main`, and create
-   `feat/supervised-creation` from it. Check local changes before switching;
-   preserve the user's untracked handoff copy without adding or overwriting it.
+1. The merge/branch transition is complete. Continue on `feat/supervised-creation`
+   and preserve the user's untracked handoff copy without adding or overwriting it.
 2. Reuse the validated proposal and read-back contracts. Design a backend
    boundary for explicit approval of exact content, campaign and operation class.
    Keep real mutation tools/execution disabled under the current authorization.
@@ -474,11 +479,11 @@ promise an automatic ChatGPT-generated-image-to-Kanka path based on metadata rea
 
 At the start of a Codex session, inspect `git status`, `git branch -a`, the
 latest commits, the PR, `pyproject.toml`, source, tests and workflow logs.
-Before the user merges PR #1, put the authorized handoff update on
-`feat/read-only-foundation`. After that merge, use `feat/supervised-creation`
-based on updated remote `main`; never push directly to `main` without an explicit
-request. Keep commits focused and PRs reviewable. Respect uncommitted changes by
-others, and refresh branch-dependent README/workflow instructions deliberately.
+Use `feat/supervised-creation`, based on the merged remote `main`; never push
+directly to `main` without an explicit request. Keep commits focused and PRs
+reviewable. Respect uncommitted changes by others, and refresh branch-dependent
+README/workflow instructions deliberately. The live manual workflow's branch
+guard now targets this branch while keeping its repository/secret restrictions.
 
 When reporting outcomes in this development chat, answer in **English**, mention
 changed paths/commit/PR, show actual commands and test outcomes, and distinguish
@@ -486,9 +491,8 @@ changed paths/commit/PR, show actual commands and test outcomes, and distinguish
 If blocked, give the specific error and a realistic next step; do not claim
 future work has already been carried out.
 
-**Next Codex assignment suggestion:** "Read AGENTS.md, verify PR #1 has been merged
-by the user, then create feat/supervised-creation from the updated origin/main.
-Inspect the existing proposal, offline rehearsal and aggregate reader. Implement
-the smallest supervised-creation approval/scoping slice with offline tests and
-explicit recovery behavior. Keep live Kanka read-only until new write consent and
-a disposable campaign are supplied. Preserve secrets and existing user files."
+**Continuation suggestion:** "Read AGENTS.md and docs/supervised-creation.md on
+feat/supervised-creation. Inspect the shared approval contract, offline rehearsal,
+tests and current PR/CI before extending recovery or host integration. Keep live
+Kanka read-only until new write consent and a disposable campaign are supplied.
+Preserve secrets and existing user files."
