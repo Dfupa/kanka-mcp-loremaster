@@ -15,21 +15,33 @@ The system must know the difference between **reading established lore** and
 - **Canonical GitHub repository:** https://github.com/Dfupa/kanka-mcp-loremaster
   (note this exact spelling; not `kanka-loremaster-mcp`).
 - **Owner:** `Dfupa`; **license:** MIT; **repository visibility:** PUBLIC.
-- **Default branch:** `main`; currently the stable skeleton (`README.md`, `LICENSE`).
-- **Current development branch:** `feat/read-only-foundation`.
+- **Default branch:** `main`.
+- **Development branch at this handoff:** `feat/read-only-foundation`.
 - **Current review:** https://github.com/Dfupa/kanka-mcp-loremaster/pull/1
-  (draft PR targeting `main`; do not merge without the user's approval).
+  (targeting `main`; the user has reviewed and accepted it, but will personally
+  mark it ready, merge it and delete the current branch).
+- **Next agreed branch:** `feat/supervised-creation`, created from the updated
+  remote `main` **after** the user completes the merge. Verify the actual PR and
+  branch state first; do not assume the merge or deletion has already happened,
+  create the next branch from an old `main`, or recreate the retired branch.
+- The agent's current assignment is to update and push this handoff to PR #1.
+  Leave PR readiness, merging and branch deletion to the user as requested.
 - Continue from the latest remote branch, not an earlier chat-generated ZIP.
-- Keep `README.md` unchanged until the integration is functionally verified;
-  then replace the placeholder with honest setup, usage and limitations.
-- User-facing discussion defaults to **Spanish**. Python names, code, comments,
-  docstrings, MCP descriptions, policies and skills default to **English**.
-  Adapt natural-language replies to the interlocutor's language.
+- `README.md` now documents the verified implementation, setup and limitations.
+  Keep it accurate as functionality and branch setup change.
+- This development chat and its handoff use **English**, as explicitly requested
+  by the user. Python names, code, comments, docstrings, MCP descriptions, policies
+  and skills use **English**. Product answers adapt to the interlocutor's language;
+  Spanish remains the product default when no language is specified. Preserve
+  source lore in its original language.
 
 **Scope of standing authorization:** code changes and tests in the development
 branch are allowed. The user's authorization for Kanka has been **READ-ONLY**.
 There is no standing authorization to create, modify, delete, transform, or
 otherwise persist anything in any Kanka campaign.
+Offline creation rehearsals and development of their validated proposals are
+authorized. PR acceptance and the next branch plan do **not** authorize live
+Kanka writes, image uploads, or exposure of mutation MCP tools.
 
 ## 2. Engineering philosophy: Ponytail (full mode)
 
@@ -79,43 +91,104 @@ Run the commands in this order and examine the final CI run for the exact commit
 Do not equate a Ruff formatting failure with a failing test suite: GitHub's
 workflow stops before `pytest` when its earlier steps fail.
 
-## 3. Actual repository state at handoff (2026-10-19)
+## 3. Verified implementation and merge handoff (2026-10-19)
 
 Read the current remote state again at the start: this is a snapshot, not a
 claim that files or CI results will remain unchanged.
 
-- At inspection, the tip of `feat/read-only-foundation` was
-  `77a48114fb10dbc106ccc0459e5de45aa4bdecfa`.
-- `src/loremaster/kanka.py` contains an asynchronous HTTPX read-only client
-  for campaigns, generic entities, posts and name-based entity resolution.
-- `src/loremaster/server.py` registers MCP tools via `FastMCP`.
-- `tests/test_kanka.py` contains mocked API tests.
-- `.github/workflows/tests.yml` checks Ruff and Pytest.
-- `.github/workflows/verify-character-lookup.yml` contains a one-time-style,
-  GET-only real API check triggered by changes to that workflow file.
-- `scripts/private_kanka_check.py` is a **legacy experimental script** from an
-  earlier attempt. Do not treat it as the canonical API client or run it
-  automatically; assess removing it once a safe replacement is validated.
-- GitHub Actions secret `KANKA_API_TOKEN` was configured by the user; its
-  presence/value must be checked *within the runner* if needed, never exposed.
-- **CI is RED**: the two most recent Python-check jobs passed `ruff check .`
-  but failed `ruff format --check .` in these files:
-  `scripts/private_kanka_check.py`, `src/loremaster/kanka.py`,
-  `tests/test_kanka.py`. The formatter proposals are in the job logs.
-  No following `pytest` step ran on those jobs.
-- The real identity check discovered **one token-visible campaign**, yet did
-  **not** verify Marcian, Roderick or Elgith; this is inconclusive. The current
-  verifier only tries campaign `33742` if that ID is not in the visible list.
-  Inspect whether the visible campaign is already `33742`, what Kanka's
-  filtered endpoint actually returns, and whether the schema assumptions
-  are wrong. Do not claim the characters do not exist.
-- Previous local/offline tests passed with mocked responses; **that is not
-  evidence of successful live entity resolution**.
+- **Verified implementation baseline:**
+  `d25e116b133f2a4174e76520657c81109793ee4d`
+  (`feat: aggregate entity lore and rehearse creation offline`). This handoff is
+  a documentation follow-up; inspect CI for its eventual exact commit separately.
+- **Baseline CI is GREEN:**
+  https://github.com/Dfupa/kanka-mcp-loremaster/actions/runs/39260169288
+  completed successfully for that exact implementation commit. Ruff lint and
+  format checks passed; **250 tests passed in CI** and locally. Earlier Ruff/CI
+  failures and the old inconclusive identity lookup have been resolved.
+- `src/loremaster/kanka.py`: asynchronous GET-only HTTPX client, campaign
+  allowlists, scoped identity checks, pagination, bounded 429 backoff, and
+  inventory/relation enrichment. Universal and module IDs remain distinct.
+- `src/loremaster/aggregate.py`: `get_entity_full` composes verified generic and
+  module fields plus eleven supported direct attachment sections: `posts`,
+  `inventory`, `relations`, `attributes`, `reminders`, `assets`, `abilities`,
+  `tags`, `mentions`, `permissions`, and `images`. It supports section selection,
+  independent source/status/completeness, and stateless page continuation.
+- `src/loremaster/server.py`: **eight read-only FastMCP tools**:
+  `list_campaigns`, `find_entities_by_name`, `search_entities`, `get_entity`,
+  `get_entity_full`, `get_entity_posts`, `get_entity_inventory`,
+  `get_entity_relations`. `src/loremaster/results.py` defines their shared result
+  envelope. All tools have read-only annotations and structured error handling.
+- **Live read-only evidence:** actual SDK stdio client/server checks verified
+  Marcian's identity/description, Roderick's inventory, Elgith's explicit
+  relations, search and posts. A separate full-entity stdio check retrieved all
+  eleven sections for one authorized entity; nine sections completed, while
+  attributes and permissions lacked pagination metadata and were correctly
+  marked incomplete. Account quota discovery and shutdown passed. This is not
+  evidence for every account, campaign, record or permission combination.
+- `scripts/offline_creation.py`: a **network-isolated rehearsal**, not a live
+  writer. It validates immutable synthetic proposals, previews ordered requests,
+  binds approval to a digest, resolves references, simulates a character with
+  description, outgoing relation, equipped linked inventory and exactly two
+  private posts, and compares read-back through the aggregate to the proposal.
+  Both HTTP clients require in-memory `MockTransport`; there is no live transport
+  option or token/environment loading. The CLI preview and approved execution
+  passed. Tests cover rejected steps, partial progress, same-instance retries
+  without duplicates, uncertain outcomes and content mismatches.
+- The rehearsal journal is **in memory only**. Timeouts/5xx block blind retry
+  pending reconciliation. Durable idempotency, production approval enforcement,
+  transaction guarantees, live creation/editing/deletion and uploads are not
+  implemented or verified. No real Kanka record has been changed.
+- Tests include synthetic API boundary cases and an actual subprocess SDK stdio
+  session dispatching all eight tools, output schemas, errors, recovery and
+  cleanup. `.github/workflows/tests.yml` runs offline checks without credentials.
+- `scripts/verify_mcp.py` is the safe GET-only stdio smoke check. Its aggregate
+  demonstration requests posts only; it does not reproduce the separate full
+  eleven-section live inspection. `scripts/verify_character_lookup.py` remains
+  a safe direct-client identity verifier.
+- `.github/workflows/verify-character-lookup.yml` is now **manual dispatch only**,
+  uses `scripts/verify_mcp.py`, and is restricted to the repository and
+  `feat/read-only-foundation`. Once PR #1 is merged and that branch is deleted,
+  its branch guard must be deliberately updated before using it on the next
+  branch. Do not remove secret protections or add live checks to untrusted PRs.
+  GitHub dispatch also requires the workflow to exist on the default branch.
+- GitHub Actions secret `KANKA_API_TOKEN` was configured earlier by the user;
+  its current presence/value is not verified by these offline jobs. Check only
+  inside an authorized runner when needed, and never expose it.
+- `scripts/private_kanka_check.py` remains a **legacy experimental script**,
+  retained and unused. Never execute it automatically or treat it as the
+  canonical client/verifier. Do not commit credentials or live campaign dumps.
+- Local stdio is verified; a selected desktop host's configuration/UI, remote
+  hosting, multi-user authentication and separate GM/player isolation are not.
 
-**Immediate priority:** make CI genuinely green, inspect the live read-only
-lookup failure, validate the real entity schema and campaign fallback, and
-make Marcian, Roderick and Elgith resolvable without a local ID dictionary.
-Only then expand read-only features.
+**Immediate priority:** finish the handoff-only PR update, then let the user mark
+PR #1 ready, merge and delete its branch. After confirming that transition,
+start `feat/supervised-creation` from the latest remote `main`. The next slice is
+supervised-creation design and offline verification; live execution still needs
+separate authorization and a designated disposable campaign. Do not restart the
+completed foundation work or assume that every planned product capability exists.
+
+### Account behavior, completeness and remaining local safeguards
+
+- Follow the user's decision to adapt to actual account allowances rather than
+  increasing fixed limits or hardcoding free/premium tiers. Aggregate reads use
+  `/profile`'s `rate_limit` for pacing and each response's `meta.per_page` for
+  effective page size. A live profile returned `default_pagination: 0` for an
+  unset preference; preserve it without treating it as the page size. Unknown
+  quota metadata fails explicitly; do not infer entitlement from a tier name.
+- Existing local safety budgets are **not subscription limits**: complete
+  campaign/name listings and each aggregate section stop at 20 pages per call;
+  aggregate reads allow 100 GET attempts and 90 seconds of paced reads within
+  the 120-second MCP timeout. Existing linked enrichment is capped at 20 distinct
+  records per call. Legacy pages without `meta.per_page` retain a 100-row guard.
+  Tool JSON responses are capped at 256 KiB. Do not silently truncate or call
+  these account limits. Continuation does not repair missing linked enrichment.
+- The aggregate includes direct attachment data and image/file references, not
+  recursive graph expansion, binary downloads, interpreted calendar rules or
+  conversion of fantasy dates. Preserve dates and calendar IDs verbatim.
+- `complete` applies to the requested scope in **this response**. A continuation
+  starting after page 1 remains incomplete on its own; callers combine pages and
+  inspect missing data. An unavailable section is not empty, a missing pagination
+  contract cannot prove completeness, and multiple reads are not a snapshot.
 
 ## 4. Kanka API contracts and identity resolution
 
@@ -181,6 +254,14 @@ campaigns, Unicode and API rate limiting. No silent partial results. Use a
 bounded request budget, backoff on 429, reasonable timeouts, and avoid exposing
 sensitive payloads or Bearer tokens in error messages and logs.
 
+**Verified search-schema caveat:** the live `/search/{term}` endpoint returned
+`data` and `sync` without pagination metadata. Its `id` was a universal entity ID,
+while its `child_id` representation did not match the module record ID. Older
+responses may supply `entity_id` separately. The client verifies candidates
+against generic records and returns normalized identity fields; it marks unknown
+search completeness explicitly. Continue to use `find_entities_by_name` for
+complete name resolution. Do not restore assumptions based only on older docs.
+
 ## 5. Core product capabilities and suggested skills
 
 Implement iteratively; the following are **product requirements / planned
@@ -189,8 +270,9 @@ separable but avoid creating an empty framework for nine skills at once.
 
 ### 5.1 Language and campaign context
 
-`language-context`: adapt final natural-language answers to the user; default
-Spanish. Discover available campaigns, identify active campaign from explicit
+`language-context`: adapt product answers to the user; default Spanish when no
+language is specified. This development conversation remains English. Discover
+available campaigns, identify active campaign from explicit
 user/session context, and separate player-visible from GM-only knowledge.
 Never cross-contaminate campaigns. Ask for disambiguation when required.
 
@@ -262,6 +344,12 @@ endpoints). Do not expose mutation MCP tools or run integration tests against
 real Kanka that write anything until the user specifically authorizes a later
 phase and a safe disposable/test campaign has been selected.
 
+The accepted offline rehearsal may simulate POSTs only through its mandatory
+`MockTransport`. Keep it isolated from the production GET-only client. Developing
+the next proposal/approval boundary and offline tests does not enable real writes.
+Do not treat a rehearsal approval digest as production authorization or its
+same-instance journal as durable retry protection.
+
 **Future user-configurable modes (planned, not active):**
 
 1. `supervised` (**default**): read and verify, prepare a proposal/preview,
@@ -310,7 +398,7 @@ player persona. Separate suggestions from successful persisted operations.
 
 ## 8. Development roadmap and acceptance criteria
 
-### Phase A — Repair and validate foundation (FIRST)
+### Phase A — Repair and validate foundation (completed at verified baseline)
 
 - Inspect latest branch and failed CI logs; fix ALL Ruff check/format failures
   including the legacy script if it remains tracked. Run actual Pytest.
@@ -324,7 +412,7 @@ player persona. Separate suggestions from successful persisted operations.
   check demonstrates correct identity resolution**, or clearly document an
   external permission/API blocker.
 
-### Phase B — Read-only lore coverage
+### Phase B — Read-only lore coverage (MVP delivered; wider coverage remains)
 
 - Expand MVP to relations and inventory, followed by attributes, posts,
   calendar/events and direct cross-entity references.
@@ -332,6 +420,10 @@ player persona. Separate suggestions from successful persisted operations.
   responses. Preserve completeness and provenance.
 - Deliver the three canonical demonstrations: **Marcian entity lookup**,
   **Roderick's inventory**, **Elgith's relations**.
+- These demonstrations, the aggregator and its account-aware behavior are
+  delivered at the baseline in section 3. Calendar interpretation, chronology,
+  recursive references and full permission coverage remain future work; do not
+  describe the entire read-only product roadmap as finished.
 
 ### Phase C — Canon-aware lorekeeping
 
@@ -349,22 +441,54 @@ player persona. Separate suggestions from successful persisted operations.
 - Never enable deletion or automatic canon rewriting as a side effect of
   implementing an apparently read-only feature.
 
+### Next agreed slice — Supervised creation, offline first
+
+This slice may precede broader canon-aware lorekeeping; implementing every
+calendar/chronology capability is not a prerequisite for the narrow creation test.
+
+1. Confirm the user's merge of PR #1, fetch the updated `origin/main`, and create
+   `feat/supervised-creation` from it. Check local changes before switching;
+   preserve the user's untracked handoff copy without adding or overwriting it.
+2. Reuse the validated proposal and read-back contracts. Design a backend
+   boundary for explicit approval of exact content, campaign and operation class.
+   Keep real mutation tools/execution disabled under the current authorization.
+3. Extend offline coverage for reference resolution, privacy, duplicate names,
+   stale state, rejected/partially completed steps, durable progress design,
+   uncertain-response reconciliation and verification. Do not blindly retry POSTs
+   or promise atomic transactions without a verified upstream contract.
+4. Use the acceptance scenario already rehearsed: one test character with a
+   description, outgoing relationship, linked inventory and exactly two posts.
+   Verify universal versus module IDs and every approved field after execution.
+   The inventory visibility parameter spelling in Kanka's docs is unresolved;
+   verify its actual contract before implementing a live adapter.
+5. Only after new write authorization and explicit selection of a disposable
+   campaign, implement/enable the scoped live execution path and run that exact
+   reviewed scenario. Scope cleanup explicitly; never add automatic deletion.
+
+Image attachment is later work: documentation provides an entity image-upload
+endpoint and ChatGPT file inputs, but no live upload or generated-image handoff
+has been verified. Images also require separate write authorization. Do not
+promise an automatic ChatGPT-generated-image-to-Kanka path based on metadata reads.
+
 ## 9. Continuity and response protocol
 
 At the start of a Codex session, inspect `git status`, `git branch -a`, the
 latest commits, the PR, `pyproject.toml`, source, tests and workflow logs.
-Prefer an incremental change on `feat/read-only-foundation` or a feature branch
-based on it; never push to `main` without an explicit request. Keep commits
-focused and the PR reviewable. Respect uncommitted changes by others.
+Before the user merges PR #1, put the authorized handoff update on
+`feat/read-only-foundation`. After that merge, use `feat/supervised-creation`
+based on updated remote `main`; never push directly to `main` without an explicit
+request. Keep commits focused and PRs reviewable. Respect uncommitted changes by
+others, and refresh branch-dependent README/workflow instructions deliberately.
 
-When reporting outcomes, give the user's requested answer in Spanish, mention
+When reporting outcomes in this development chat, answer in **English**, mention
 changed paths/commit/PR, show actual commands and test outcomes, and distinguish
 **offline mocked success**, **GitHub CI green**, and **live Kanka verified**.
 If blocked, give the specific error and a realistic next step; do not claim
 future work has already been carried out.
 
-**First Codex assignment suggestion:** "Inspect the current remote branch and
-last failed Actions logs. Make Ruff format/check and Pytest green with minimal
-changes. Then diagnose and fix the strictly GET-only Marcian/Roderick/Elgith
-identity lookup, trying visible campaigns first and campaign 33742 when
-needed. Preserve secret confidentiality and do not modify any Kanka record."
+**Next Codex assignment suggestion:** "Read AGENTS.md, verify PR #1 has been merged
+by the user, then create feat/supervised-creation from the updated origin/main.
+Inspect the existing proposal, offline rehearsal and aggregate reader. Implement
+the smallest supervised-creation approval/scoping slice with offline tests and
+explicit recovery behavior. Keep live Kanka read-only until new write consent and
+a disposable campaign are supplied. Preserve secrets and existing user files."
