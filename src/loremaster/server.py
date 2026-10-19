@@ -21,6 +21,9 @@ from loremaster.creation import (
     CharacterDraft,
     CreationScope,
     InventoryDraft,
+    ItemDraft,
+    OrganisationDraft,
+    OrganisationMemberDraft,
     PostDraft,
     RelationDraft,
 )
@@ -361,6 +364,94 @@ def create_server(
             )
 
         @server.tool(annotations=creation_annotations)
+        async def prepare_item_creation(
+            campaign_id: PositiveID,
+            name: NameQuery,
+            entry: str,
+            is_private: Annotated[bool, Field(strict=True)] = True,
+            type: str | None = None,
+            price: str | None = None,
+            size: str | None = None,
+            weight: str | None = None,
+        ) -> ToolResponse:
+            """Preview an item record without POSTs or automatic inventory changes.
+
+            Type, price, size and weight are optional text per Kanka's item API.
+            Local approval and item.create scope are required. Use the verified
+            universal ID in a later character inventory proposal if requested.
+            """
+
+            async def prepare():
+                return await creation.prepare(
+                    ItemDraft(
+                        campaign_id=campaign_id,
+                        name=name,
+                        entry=entry,
+                        is_private=is_private,
+                        type=type,
+                        price=price,
+                        size=size,
+                        weight=weight,
+                    )
+                )
+
+            return await read(
+                prepare, f"campaigns/{campaign_id}/items", campaign_id=campaign_id
+            )
+
+        @server.tool(annotations=creation_annotations)
+        async def prepare_organisation_creation(
+            campaign_id: PositiveID,
+            name: NameQuery,
+            entry: str,
+            is_private: Annotated[bool, Field(strict=True)] = True,
+            type: str | None = None,
+            members: list[OrganisationMemberDraft] | None = None,
+        ) -> ToolResponse:
+            """Preview a new organisation and memberships, without sending POSTs.
+
+            Members use existing characters' universal IDs; the backend resolves
+            character/organisation module IDs for Kanka's membership endpoint.
+            Organisation and memberships default to private. Local approval and
+            both operation permissions are required before execution.
+            """
+
+            async def prepare():
+                return await creation.prepare(
+                    OrganisationDraft(
+                        campaign_id=campaign_id,
+                        name=name,
+                        entry=entry,
+                        is_private=is_private,
+                        type=type,
+                        members=tuple(members or ()),
+                    )
+                )
+
+            return await read(
+                prepare,
+                f"campaigns/{campaign_id}/organisations",
+                campaign_id=campaign_id,
+            )
+
+        @server.tool(annotations=creation_annotations)
+        async def execute_creation(
+            campaign_id: PositiveID, proposal_id: str
+        ) -> ToolResponse:
+            """Execute only a stored typed proposal with current local approval.
+
+            Scope, exact content, reference identities and progress are checked
+            in the backend. Unknown outcomes require reviewed reconciliation;
+            no approval flag, arbitrary body/path or cleanup is accepted.
+            """
+            return await read(
+                lambda: creation.execute(campaign_id, proposal_id),
+                f"campaigns/{campaign_id}/entities",
+                campaign_id=campaign_id,
+                mutation=True,
+            )
+
+        @server.tool(annotations=creation_annotations)
         async def execute_character_creation(
             campaign_id: PositiveID, proposal_id: str
         ) -> ToolResponse:
@@ -370,8 +461,15 @@ def create_server(
             Inspect returned status/completed IDs. Unknown outcomes remain blocked
             for reviewed reconciliation; execution never rolls back or deletes.
             """
+
+            async def execute():
+                creation.status(campaign_id, proposal_id)
+                if not isinstance(creation.store.draft(proposal_id), CharacterDraft):
+                    raise PermissionError("This tool requires a character proposal")
+                return await creation.execute(campaign_id, proposal_id)
+
             return await read(
-                lambda: creation.execute(campaign_id, proposal_id),
+                execute,
                 f"campaigns/{campaign_id}/characters",
                 campaign_id=campaign_id,
                 mutation=True,

@@ -16,14 +16,14 @@ The system must know the difference between **reading established lore** and
   (note this exact spelling; not `kanka-loremaster-mcp`).
 - **Owner:** `Dfupa`; **license:** MIT; **repository visibility:** PUBLIC.
 - **Default branch:** `main`.
-- **Active development branch:** `feat/supervised-write-execution`, created from
-  merged `origin/main` at `3ee4f916414f42e8ed5fa5e49fff7a0330322b3a`.
-- **Completed reviews:** PR #1 and
-  https://github.com/Dfupa/kanka-mcp-loremaster/pull/2 were merged by the user;
-  their remote branches were deleted. Do not recreate them or add work to them.
-- **Current slice:** opt-in MCP character proposals/execution, a separate trusted
-  local approval command, and durable status/reconciliation. Keep the PR in draft
-  for review; merging and authorizing new live tests remain separate decisions.
+- **Active development branch:** `feat/supervised-item-creation`, created from
+  merged `origin/main` at `0a1987d1ee42433599454686a1856d207fbfaa83`.
+- **Completed reviews:** PRs #1, #2 and #3 were merged by the user. Their remote
+  feature branches were deleted; do not recreate them or add work to them.
+- **Current slice:** organization creation with character memberships first,
+  then item proposals/execution, reusing supervised approval and durable progress.
+  Keep the new PR in draft. The user explicitly requested **offline validation
+  only** for this slice: no live Kanka tests, writes or credential use.
 - Preserve the user's untracked `codex_kanka_loremaster_AGENTS.md` unchanged.
   Test fixtures stay outside the release package; do not add synthetic MCP tools
   or retain campaign-specific one-off helpers in the product.
@@ -40,8 +40,9 @@ The system must know the difference between **reading established lore** and
 branch are allowed. The user's authorization for Kanka has been **READ-ONLY**.
 There is no standing authorization to create, modify, delete, transform, or
 otherwise persist anything in any Kanka campaign.
-Offline rehearsals and development of the opt-in supervised creation adapter
-are authorized by the user's accepted next-branch plan. The normal server remains
+Offline rehearsals and development of opt-in supervised character, organization,
+membership and item creation are authorized. The current request explicitly
+excludes live Kanka testing. The normal server remains
 read-only. Enabling its optional creation tools requires explicit local database,
 campaign and operation configuration; execution also requires separate local
 review/approval. This development authorization does **not** permit new live Kanka
@@ -99,10 +100,10 @@ workflow stops before `pytest` when its earlier steps fail.
 
 Read current Git/remote state at session start; this is a handoff snapshot.
 
-- **Merged baseline:** PR #2's feature tip
-  `b16d85c5469e6f0dd0e7d6d88693be91f8def000`; main merge `3ee4f91`.
-  Baseline CI was green with **342 tests**:
-  https://github.com/Dfupa/kanka-mcp-loremaster/actions/runs/39278430298.
+- **Merged baseline:** PR #3's feature tip
+  `cb076ba5f847b1b38d1e8a9f2815aea1175c63fa`; main merge `0a1987d`.
+  Baseline Ruff/CI passed with **416 tests**:
+  https://github.com/Dfupa/kanka-mcp-loremaster/actions/runs/39291728407.
   This is historical evidence, not the CI result for subsequent changes.
 - `kanka.py` remains a GET-only HTTPX reader with campaign scope, verified
   universal/module IDs, pagination, bounded 429 backoff and enrichment.
@@ -129,11 +130,22 @@ Read current Git/remote state at session start; this is a handoff snapshot.
   final field/ID read-back are required. It does not edit/delete, roll back,
   automatically reconcile or retry unknown outcomes. Approval is refused while
   intent is uncertain; reconciliation must precede fresh approval.
-- The server registers three extra tools only when all creation settings are
-  provided: `prepare_character_creation`, `execute_character_creation`,
-  `get_creation_status`. There is no approve/revoke/reconcile mutation tool.
-  No database is opened in default read-only mode. See README for configuration
-  and `docs/supervised-creation.md` for trust, privacy and recovery limitations.
+- Default startup still has eight read-only tools. Opt-in startup now has
+  **fourteen tools**: the reads plus character/organization/item preparation,
+  generic `execute_creation`, the compatible character-only execution alias,
+  and `get_creation_status`. Every operation still needs explicit backend scope.
+  Approval/revocation/reconciliation remain separate local host actions.
+- The three finite draft types share preview, approval, POST transport, journal
+  and verification. Existing character payloads without a type discriminator
+  remain readable. New organization/item payloads bind an explicit type into
+  the stored review digest. Unknown types/fields fail closed.
+- Organization members use universal character IDs in proposals, then module
+  IDs in `organisations/{organisation.id}/organisation_members`. Core and member
+  creation have separate operation classes. Membership list reads verify owner,
+  campaign, unique IDs and complete pagination; unknown completeness blocks
+  verification/reconciliation. Item creation is separate from inventory addition.
+- See README and `docs/supervised-creation.md` for configuration, the exact supported
+  fields and limitations. No database opens in default read-only mode.
 - New coverage includes actual SDK stdio sessions with a separate interactive
   approval subprocess and shared SQLite storage, mandatory mock HTTP, expiry,
   revocation, cancellation, malformed responses and all four reconciliation
@@ -144,7 +156,7 @@ Read current Git/remote state at session start; this is a handoff snapshot.
   and request-only `two_way` is not a live one-way guarantee.
 - `.github/workflows/tests.yml` runs offline checks without credentials. The live
   verification workflow remains manually dispatched, GET-only, repository scoped
-  and guarded to `feat/supervised-write-execution`. Do not remove secret protections.
+  and guarded to `feat/supervised-item-creation`. Do not remove secret protections.
 - `scripts/private_kanka_check.py` is legacy, retained and unused; never run it
   automatically. No credentials, campaign dumps or live test IDs belong in Git.
 - Desktop-host UI, remote hosting, multi-user authentication, inventory per-entry
@@ -368,7 +380,7 @@ with their originating note/session and retain provenance for reversibility.
 ## 6. Writes: explicit governance, never implicit consent
 
 **Default runtime:** Kanka READ-ONLY. The user accepted developing a narrowly
-scoped opt-in character creation adapter on the current feature branch. Enable it
+scoped opt-in character/organization/item creation on the current feature branch. Enable it
 only with all three explicit local creation settings and separate terminal
 approval. Do not add unrestricted writes or treat chat assertions as approval.
 No new live integration writes are authorized by this development request.
@@ -470,20 +482,24 @@ player persona. Separate suggestions from successful persisted operations.
 - Never enable deletion or automatic canon rewriting as a side effect of
   implementing an apparently read-only feature.
 
-### Current agreed slice — Opt-in supervised write execution
+### Current agreed slice — Organization membership and supervised items
 
-1. Continue on `feat/supervised-write-execution`, based on merged PR #2. Preserve
+1. Continue on `feat/supervised-item-creation`, based on merged PR #3. Preserve
    the untracked handoff copy. Keep commits focused and the new PR in draft.
-2. Complete the local proposal → terminal approval → MCP execution → read-back
-   flow and meaningful mocked stdio/recovery tests. Preserve default read-only
-   startup and explicit campaign/operation scope.
-3. Verify dependencies, formatting, lint and all tests in the required order;
-   inspect CI for the exact published commit. Distinguish offline success from
-   historical live evidence and any future separately authorized live test.
-4. Before a new live test, obtain explicit scope and review exact proposals and
-   privacy defaults. Inventory entry visibility currently uses Kanka's default;
-   do not promise private inventory. Do not investigate the observed mirrored
-   relation as a blocker: the user explicitly asked to ignore it.
+2. Organization creation and two actual memberships (synthetic Éldan and mentor)
+   were added before item creation. Both use the same local approval, scope,
+   durable progress and read-back path. Validate everything offline only.
+3. The complete stdio scenario creates mentor → compass item → Éldan with
+   relation/inventory/two posts → organization with both characters as members.
+   Each entity is its own explicitly approved proposal. Returned universal and
+   module IDs bind later steps. Ten mocked POSTs; no direct setup writes, generic
+   batch transaction, live IDs or automatic deletion.
+4. Run install, Ruff format/check/format-check and full Pytest in order before
+   pushing; inspect CI for the exact published commit. Historical live character
+   acceptance does not establish live organization/member/item API behavior.
+5. Full canon-aware session-note processing, broader edits, uploads, transfers,
+   automatic modes and remote authentication remain future milestones. The user
+   explicitly asked to ignore the observed relation mirroring as a blocker.
 
 Image attachment remains later work. Do not promise a generated-image-to-Kanka
 handoff based on metadata reads; uploads need separate authorization and tests.

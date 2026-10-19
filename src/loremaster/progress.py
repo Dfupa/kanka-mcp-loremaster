@@ -14,7 +14,11 @@ import stat
 from pathlib import Path
 from typing import Any
 
-from loremaster.creation import ApprovedCreation, resolve_creation_request
+from loremaster.creation import (
+    ApprovedCreation,
+    creation_kind,
+    resolve_creation_request,
+)
 from loremaster.verification import matches_creation_fields
 
 
@@ -165,7 +169,10 @@ class CreationJournal:
             expected_path, expected_body = resolve_creation_request(
                 approved.draft,
                 key,
-                entity_id=progress.get("character", {}).get("entity_id"),
+                entity_id=progress.get(creation_kind(approved.draft), {}).get(
+                    "entity_id"
+                ),
+                child_id=progress.get(creation_kind(approved.draft), {}).get("id"),
                 module_ids={
                     int(key): value
                     for key, value in json.loads(execution["refs"]).items()
@@ -213,7 +220,7 @@ class CreationJournal:
         """Commit validated response IDs or a sanitized failure classification."""
         if state not in ("confirmed", "rejected", "uncertain"):
             raise ValueError("Invalid operation outcome")
-        identity = self._identity(result) if state == "confirmed" else None
+        identity = self._identity(result, key) if state == "confirmed" else None
         with self._db:
             cursor = self._db.execute(
                 "UPDATE steps SET state = ?, result = ? "
@@ -224,16 +231,19 @@ class CreationJournal:
                 raise RuntimeError("Operation intent changed or is missing")
 
     @staticmethod
-    def _identity(result: dict[str, Any] | None) -> dict[str, int]:
+    def _identity(result: dict[str, Any] | None, step: str) -> dict[str, int]:
         if (
             not isinstance(result, dict)
             or type(result.get("id")) is not int
             or result["id"] <= 0
         ):
             raise ValueError("Result must contain a positive record ID")
-        identity = {
-            key: result[key] for key in ("id", "entity_id", "owner_id") if key in result
-        }
+        fields = (
+            ("id", "organisation_id", "character_id")
+            if step.startswith("member:")
+            else ("id", "entity_id", "owner_id")
+        )
+        identity = {key: result[key] for key in fields if key in result}
         if any(type(value) is not int or value <= 0 for value in identity.values()):
             raise ValueError("Invalid result identity")
         return identity
@@ -274,11 +284,14 @@ class CreationJournal:
         row = self.pending(execution_id)
         if row["fingerprint"] != fingerprint:
             raise ValueError("Reviewed intent does not match pending operation")
-        identity = self._identity(result)
+        identity = self._identity(result, row["key"])
         if not matches_creation_fields(row["body"], result):
             raise ValueError("Reconciled record differs from the pending request")
-        if row["key"] == "character" and "entity_id" not in identity:
-            raise ValueError("Reconciled character lacks its universal entity ID")
+        if (
+            row["key"] in ("character", "organisation", "item")
+            and "entity_id" not in identity
+        ):
+            raise ValueError("Reconciled character/core lacks its universal entity ID")
         with self._db:
             cursor = self._db.execute(
                 "UPDATE steps SET state = 'confirmed', result = ?, reconciled_by = ? "

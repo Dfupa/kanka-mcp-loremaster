@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "kanka-mcp-loremaster"
 version = "0.1.0"
-description = "MCP lore reader with opt-in supervised Kanka character creation"
+description = "MCP lore reader with opt-in supervised Kanka entity creation"
 requires-python = ">=3.13"
 dependencies = ["mcp>=1.30,<2", "httpx>=0.28,<1"]
 

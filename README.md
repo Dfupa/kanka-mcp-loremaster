@@ -6,14 +6,14 @@ inventory and explicit relationships. A full-entity tool combines supported dire
 attachments with per-section provenance. Python 3.13 or newer is required.
 
 The current MVP uses local **stdio** transport. It is read-only by default.
-Optional supervised character creation requires explicit local configuration and
+Optional supervised entity creation requires explicit local configuration and
 a separate terminal approval. Editing, transfers and deletion are not supported.
 
 ## Install
 
-Install from `main` for the merged baseline. The opt-in execution feature is
-being developed on `feat/supervised-write-execution`; check out that branch before
-installation to evaluate it:
+Install from `main` for the merged character-creation baseline. Organization and
+item creation are being developed on `feat/supervised-item-creation`; check out
+that branch before installation to evaluate the extensions:
 
 ```bash
 git clone https://github.com/Dfupa/kanka-mcp-loremaster.git
@@ -263,7 +263,7 @@ and explicitly configure all three settings in the server's environment:
 ```bash
 export KANKA_CREATION_DATABASE='/absolute/private/directory/creation.sqlite3'
 export KANKA_WRITE_CAMPAIGN_IDS='123'
-export KANKA_WRITE_OPERATIONS='character.create,relation.create,inventory.add,post.create'
+export KANKA_WRITE_OPERATIONS='character.create,relation.create,inventory.add,post.create,organisation.create,organisation.member.add,item.create'
 ```
 
 Partial configuration fails startup. The directory must exist; new database files
@@ -272,19 +272,23 @@ must be within `KANKA_ALLOWED_CAMPAIGN_IDS` when that read allowlist is configur
 Narrow the operation list to what you actually permit. Kanka permissions still
 apply; no subscription tiers are hardcoded.
 
-Three tools are added:
+Six tools are added (fourteen tools total):
 
 | Tool | Behavior |
 | --- | --- |
 | `prepare_character_creation` | Accept campaign, name, HTML `entry`, privacy and optional relation/inventory/post lists; resolve references and store an immutable preview without POSTs |
-| `execute_character_creation` | Consume an existing local approval for `campaign_id` and `proposal_id`; execute only the stored draft and verify read-back |
+| `prepare_organisation_creation` | Preview an organization and optional memberships of existing characters, without POSTs |
+| `prepare_item_creation` | Preview an item with optional type, price, size and weight text, without POSTs |
+| `execute_creation` | Consume a local approval for the stored typed proposal and verify read-back |
+| `execute_character_creation` | Compatible character-only execution alias; rejects organization/item proposals |
 | `get_creation_status` | Return scoped local status, confirmed IDs and per-step outcomes without sending writes |
 
 Relation `target_id` and inventory `item_entity_id` are universal IDs of existing
 entities; item module IDs are resolved by the backend. Character privacy defaults
 to private, relations/posts to admin visibility. **Inventory entry privacy uses
 Kanka's default and is not configurable in this slice.** Review those consequences
-before approving. This narrow workflow does not create the referenced mentor/item.
+before approving. Each proposal creates one core entity; create dependencies in
+separately approved proposals and use their returned IDs in later proposals.
 
 Optional `age` and `sex` are text fields. `race_entity_ids` (species) and
 `location_entity_ids` accept lists of universal entity IDs. The backend verifies
@@ -292,6 +296,22 @@ their module types and resolves the module IDs for Kanka's `races` and `location
 arrays. These fields participate in review, durable intent and read-back checks;
 they are not free-form relationships or description-only mentions. See the
 [character API contract](https://app.kanka.io/api-docs/1.0/characters).
+
+Organization and item support in this branch is **offline-validated only**; no
+live Kanka tests were run for these new types. Organization `members` entries take
+`character_entity_id` (universal), optional `role` (default `Member`), `is_private`
+(default true), `pin_id` (0–3, default 0) and `status_id` (0–2, default 0 for active).
+The backend resolves character IDs and the newly created organization's module ID
+for actual membership POSTs. `organisation.create` and `organisation.member.add`
+are separate permissions. Memberships are distinct from generic relationships.
+
+Items support name, HTML description, privacy and optional text `type`, `price`,
+`size`, `weight`. Creating an item does not add it to anybody's inventory.
+Organization/item core records default to private. Unsupported fields are rejected.
+See Kanka's [organization](https://app.kanka.io/api-docs/1.0/organisations),
+[membership](https://app.kanka.io/api-docs/1.0/organisation-members) and
+[item](https://app.kanka.io/api-docs/1.0/items) contracts. Tool visibility alone
+never grants permission; the whole proposal must fit the explicit scope.
 
 After preparing a proposal, review it through the separate local command:
 
@@ -304,8 +324,9 @@ Approval displays the stored fields/references/progress and requires an
 interactive terminal plus the exact displayed proposal/digest phrase. These two
 commands need no API token. Approval lasts five minutes from local confirmation,
 is single-use, and is checked again before each POST. Then call
-`execute_character_creation` through MCP. Neither chat confirmation nor a checksum
-can issue approval; no approval command is registered as an MCP tool.
+`execute_creation` through MCP (`execute_character_creation` remains a
+character-only alias). Neither chat confirmation nor a checksum can issue
+approval; no approval command is registered as an MCP tool.
 
 **Trust boundary:** access to this private local file authorizes the host command.
 The reviewer name records the OS user, not a remote login. Anyone, including an
@@ -322,8 +343,9 @@ kanka-loremaster-approve --database /absolute/private/directory/creation.sqlite3
 ```
 
 Reconciliation uses GETs with the matching server configuration/token, displays
-matching evidence and requires an exact confirmation. For a character the candidate
-is its universal entity ID; for an attachment it is that attachment's record ID.
+matching evidence and requires an exact confirmation. For a core character,
+organization or item, use its universal entity ID. For an attachment or membership,
+use that record's own ID.
 Matching fields alone cannot prove origin, and absence never authorizes a retry.
 Reconciliation sends no POST and requires fresh approval afterward. To stop
 subsequent sends, use the same command with `revoke PROPOSAL_ID`; already sent
@@ -356,7 +378,11 @@ The [synthetic acceptance workflow](docs/synthetic-creation-validation.md) retai
 its separate read-server report. Run `pytest -q -rP tests/test_creation_server.py`
 for expected/observed fields. New opt-in execution and cross-process approval
 coverage lives in `tests/test_supervised_execution.py`, `tests/test_local_approvals.py`
-and `tests/test_supervised_stdio.py`. Test fixtures are excluded from the installed
+and `tests/test_supervised_stdio.py`. Organization and item regression coverage is
+in `tests/test_organisation_creation.py` and `tests/test_item_creation.py`. The
+complete mocked stdio scenario creates a mentor, compass item, Éldan with
+attachments, and an organization with both characters as members, using ten
+mocked POSTs and separate approvals. Test fixtures are excluded from the installed
 package. Campaign-specific one-off live helpers are not release files.
 
 ## Limits and next milestones

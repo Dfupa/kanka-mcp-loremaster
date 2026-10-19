@@ -16,7 +16,7 @@ The campaign-specific live helper is not part of the project or release.
 The optional writer now reuses this frozen scenario through
 `tests/test_supervised_execution.py` and `tests/test_supervised_stdio.py`, with
 separate local approval and mocked HTTP. The original read-server fixture below
-retains its eight-tool contract; it is not the optional eleven-tool server.
+retains its eight-tool contract; it is not the optional typed-creation server.
 See [the current execution contract](supervised-creation.md) for those additions.
 
 ## Frozen scenario
@@ -153,3 +153,44 @@ the synthetic workflow only, without establishing Kanka's live API behavior.
 The test fixture retains its deterministic outgoing relation expectation. The
 user asked not to pursue the live `two_way` discrepancy; it is not a blocker for
 this slice, and no live one-way guarantee is claimed.
+
+
+## Extended MCP-only workflow: organizations and items
+
+**Scenario ID: `synthetic-entity-workflow-v2`. Offline only; no live campaign IDs.**
+This extends acceptance coverage without changing the frozen v1 fixture above.
+`tests/test_supervised_stdio.py::test_entire_synthetic_workflow_uses_mcp_and_local_approvals`
+launches the normal server entry point with forced mock HTTP and a separate local
+approval process. Existing fixture seeds stay unchanged; the workflow creates its
+own dependencies. Species and location remain pre-existing synthetic references.
+
+| Order | Proposal | Mocked POSTs | Required read-back |
+| --- | --- | --- | --- |
+| 1 | Synthetic mentor character | 1 | Distinct universal/module IDs; public core |
+| 2 | Synthetic compass item | 1 | Type/price/size/weight text and public core; no inventory side effect |
+| 3 | Synthetic Éldan character | 5 | Description, age/sex, species/location, relation to the returned mentor ID, inventory linked to the returned item ID, two posts |
+| 4 | Synthetic organization | 3 | Public organization and two public active `Member` entries, referencing Éldan and the mentor through resolved character module IDs |
+
+Each proposal must be prepared through its typed MCP tool, denied before approval,
+reviewed/approved through the separate terminal command, then executed through
+`execute_creation`. Membership is recorded through Kanka's dedicated endpoint,
+not generic relations or descriptions. Use returned IDs throughout; fixture IDs
+are not operational lookup tables. There are ten POSTs total, no direct setup
+writes, PATCH/PUT/DELETE or cleanup calls. Closing the server discards mock state.
+
+Focused organization/item tests add invalid member types, duplicate characters,
+privacy coercion, per-operation scope, changed references, missing pagination,
+wrong owners/campaigns, replaced IDs, partial rejection/restart, uncertain core and
+membership responses, candidate reconciliation and cancellation. The same durable
+approval/journal/verification implementation handles all three core types.
+
+Run the extended checks without credentials:
+
+```bash
+pytest -q tests/test_organisation_creation.py tests/test_item_creation.py tests/test_supervised_stdio.py
+```
+
+Passing offline tests does not establish live organization/member/item response
+schemas. The user explicitly deferred live tests; existing authorized character
+results remain historical evidence only. A future live scenario must resolve
+current records again and obtain explicit campaign/operation/content approval.

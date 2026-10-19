@@ -10,7 +10,7 @@ jobs:
   verify:
     if: >-
       github.repository == 'Dfupa/kanka-mcp-loremaster' &&
-      github.ref == 'refs/heads/feat/supervised-write-execution'
+      github.ref == 'refs/heads/feat/supervised-item-creation'
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
