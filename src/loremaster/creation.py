@@ -2,7 +2,8 @@
 
 Only a trusted host may call approve/revoke. These Python methods do not
 authenticate a human or provide a UI; never expose them as model-callable tools.
-All state is process-local. Real writes remain disabled in this development slice.
+The gate in this module is process-local; local persistent approvals live in
+loremaster.approvals. HTTP execution is separate from both approval stores.
 """
 
 import hashlib
@@ -30,7 +31,7 @@ class DraftRecord(BaseModel):
 
 
 class RelationDraft(DraftRecord):
-    """Reference a universal target ID; support outgoing, one-way edges only."""
+    """Reference a universal target ID and request an outgoing relation."""
 
     target_id: ID
     relation: Annotated[Text, Field(max_length=255)]

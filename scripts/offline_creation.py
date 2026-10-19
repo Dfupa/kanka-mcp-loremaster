@@ -29,6 +29,7 @@ from loremaster.creation import (
 )
 from loremaster.kanka import API_BASE_URL, KankaClient, KankaError
 from loremaster.progress import CreationJournal
+from loremaster.verification import verify_created, verify_result_ids
 
 
 class OfflineCreation:
@@ -461,63 +462,6 @@ class OfflineCreation:
                 )
                 result["status"] = "confirmed"
             return result
-
-
-def verify_result_ids(journal: dict[str, Any], bundle: dict[str, Any]) -> None:
-    """A replaced lookalike attachment must not count as the recorded result."""
-    for section, prefix in (
-        ("relations", "relation:"),
-        ("inventory", "inventory:"),
-        ("posts", "post:"),
-    ):
-        expected = {
-            record["id"] for key, record in journal.items() if key.startswith(prefix)
-        }
-        observed = {record["id"] for record in bundle["sections"][section]["data"]}
-        if expected != observed:
-            raise KankaError(f"Created {section} record IDs changed; reconcile first")
-
-
-def verify_created(
-    draft: CharacterDraft, bundle: dict[str, Any], item_ids: dict[int, int]
-) -> None:
-    """Compare retrieved core and attachments to the exact approved draft."""
-    if bundle["missing_data"] or any(
-        not part["complete"] for part in bundle["sections"].values()
-    ):
-        raise KankaError("Created entity could not be read back completely")
-    details = bundle["details"]
-    if any(
-        details[key] != getattr(draft, key) for key in ("name", "entry", "is_private")
-    ):
-        raise KankaError("Created entity differs from the approved draft")
-    expected = {
-        "posts": [post.model_dump() for post in draft.posts],
-        "relations": [
-            {
-                **relation.model_dump(),
-                "owner_id": details["entity_id"],
-                "two_way": False,
-            }
-            for relation in draft.relations
-        ],
-        "inventory": [
-            {
-                "item_id": item_ids[item.item_entity_id],
-                "amount": str(item.amount),
-                "is_equipped": item.is_equipped,
-                "position": item.position,
-            }
-            for item in draft.inventory
-        ],
-    }
-    for section, rows in expected.items():
-        actual = bundle["sections"][section]["data"]
-        if len(actual) != len(rows) or any(
-            any(record.get(key) != value for key, value in row.items())
-            for record, row in zip(actual, rows, strict=True)
-        ):
-            raise KankaError(f"Created {section} differ from the approved draft")
 
 
 def example_draft() -> CharacterDraft:
