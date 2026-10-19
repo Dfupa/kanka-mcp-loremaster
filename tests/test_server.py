@@ -1,7 +1,5 @@
 """Exercise tool registration, dispatch and cleanup with the installed MCP SDK."""
 
-import json
-
 import httpx
 import pytest
 
@@ -32,6 +30,8 @@ async def test_sdk_registers_tools_dispatches_reads_and_closes_client(
         "find_entities_by_name",
         "get_entity",
         "get_entity_posts",
+        "get_entity_inventory",
+        "get_entity_relations",
     }
     lookup = next(tool for tool in tools if tool.name == "find_entities_by_name")
     assert set(lookup.inputSchema["required"]) == {"campaign_id", "name"}
@@ -40,10 +40,10 @@ async def test_sdk_registers_tools_dispatches_reads_and_closes_client(
         async with server._mcp_server.lifespan(server._mcp_server):
             assert not client._http.is_closed
             result = await server.call_tool("list_campaigns", {})
-            content = result[0] if isinstance(result, tuple) else result
-            assert [json.loads(block.text) for block in content] == [
-                {"id": 7, "name": "Synthetic"}
-            ]
+            assert not result.isError
+            assert result.structuredContent["data"] == [{"id": 7, "name": "Synthetic"}]
+            assert result.structuredContent["complete"] is True
+            assert result.structuredContent["error"] is None
             if fail_during_lifespan:
                 raise RuntimeError("Synthetic shutdown")
 

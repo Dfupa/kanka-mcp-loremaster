@@ -2,6 +2,8 @@
 
 import asyncio
 from collections.abc import Mapping
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any
 from unicodedata import normalize
 from urllib.parse import quote
@@ -12,6 +14,8 @@ API_BASE_URL = "https://api.kanka.io/1.0/"
 MAX_CAMPAIGN_PAGES = 20
 MAX_RATE_LIMIT_RETRIES = 2
 MAX_RETRY_DELAY = 30
+MAX_LINKED_RECORDS = 20
+MAX_PAGE_ROWS = 100
 
 # A generic entity_id must be resolved to the module's own child_id.
 ENTITY_ENDPOINTS: Mapping[str, str] = {
@@ -36,6 +40,36 @@ ENTITY_ENDPOINTS: Mapping[str, str] = {
 
 class KankaError(Exception):
     """An upstream response or transport error that is safe to report to users."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str = "invalid_response",
+        status_code: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.code = code
+        self.status_code = status_code
+
+
+def _reject_nonfinite_json(_value: str) -> None:
+    """Reject non-JSON numeric constants instead of silently accepting NaN/Infinity."""
+    raise ValueError("Non-finite JSON number")
+
+
+def _retry_delay(header: str, attempt: int) -> float:
+    """Honor delay-seconds or HTTP-date without unbounded integer conversion."""
+    header = header.strip()
+    if header.isascii() and header.isdecimal():
+        return float(int(header)) if len(header) <= 8 else MAX_RETRY_DELAY + 1
+    try:
+        deadline = parsedate_to_datetime(header)
+        if deadline.tzinfo is not None:
+            return max(0.0, (deadline - datetime.now(UTC)).total_seconds())
+    except (ValueError, TypeError, OverflowError):
+        pass
+    return float(2 ** (attempt + 1))
 
 
 class KankaClient:
@@ -109,21 +143,22 @@ class KankaClient:
                 response = await self._http.get(path, params=params)
                 if response.status_code != 429 or attempt == MAX_RATE_LIMIT_RETRIES:
                     break
-                retry_after = response.headers.get("Retry-After", "")
-                delay = (
-                    int(retry_after) if retry_after.isdecimal() else 2 ** (attempt + 1)
-                )
+                delay = _retry_delay(response.headers.get("Retry-After", ""), attempt)
                 if delay > MAX_RETRY_DELAY:
                     break
                 await asyncio.sleep(delay)
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             code = exc.response.status_code
-            raise KankaError(f"Kanka returned HTTP {code}") from None
+            raise KankaError(
+                f"Kanka returned HTTP {code}", code="upstream_http", status_code=code
+            ) from None
         except httpx.RequestError:
-            raise KankaError("Kanka request failed or timed out") from None
+            raise KankaError(
+                "Kanka request failed or timed out", code="transport_error"
+            ) from None
         try:
-            payload = response.json()
+            payload = response.json(parse_constant=_reject_nonfinite_json)
         except ValueError:
             raise KankaError("Kanka returned invalid JSON") from None
         if not isinstance(payload, dict) or "data" not in payload:
@@ -178,8 +213,10 @@ class KankaClient:
             KankaError: On invalid responses or incomplete pagination.
         """
         self._check_campaign(campaign_id)
-        if not isinstance(name, str) or not name.strip():
-            raise ValueError("name must be a non-empty string")
+        if not isinstance(name, str) or not name.strip() or len(name.strip()) > 1000:
+            raise ValueError(
+                "name must be a non-empty string of at most 1000 characters"
+            )
         requested = normalize("NFC", name.strip()).casefold()
         rows = await self._list_rows(
             f"campaigns/{campaign_id}/entities", params={"name": name.strip()}
@@ -213,44 +250,79 @@ class KankaClient:
         rows: list[dict[str, Any]] = []
         for page in range(1, MAX_CAMPAIGN_PAGES + 1):
             response = await self._get(path, params={**(params or {}), "page": page})
-            batch = response["data"]
-            if not isinstance(batch, list) or not all(
-                isinstance(row, dict) and type(row.get("id")) is int and row["id"] > 0
-                for row in batch
-            ):
-                raise KankaError("Invalid entity listing")
+            batch, has_next = self._validate_page(response, page)
             rows.extend(batch)
-            meta = response.get("meta", {})
-            links = response.get("links", {})
-            if not isinstance(meta, dict) or not isinstance(links, dict):
-                raise KankaError("Invalid pagination metadata")
-            if "last_page" not in meta and "next" not in links:
-                raise KankaError("Missing pagination completeness metadata")
-            current = meta.get("current_page", page)
-            if type(current) is not int or current != page:
-                raise KankaError("Invalid pagination current_page")
-            next_link = links.get("next")
-            if next_link is not None and (
-                not isinstance(next_link, str) or not next_link.strip()
-            ):
-                raise KankaError("Invalid pagination next link")
-            last = meta.get("last_page")
-            if "last_page" in meta:
-                if type(last) is not int or last < page:
-                    raise KankaError("Invalid pagination last_page")
-                has_next = page < last
-                if "next" in links and bool(next_link) != has_next:
-                    raise KankaError("Inconsistent pagination metadata")
-            else:
-                has_next = bool(links.get("next"))
             if not has_next:
                 return rows
         raise KankaError("Listing exceeded the pagination safety limit")
 
+    @staticmethod
+    def _validate_rows(batch: Any, *, require_id: bool = True) -> list[dict[str, Any]]:
+        """Reject malformed or oversized collections before processing records."""
+        if not isinstance(batch, list) or not all(
+            isinstance(row, dict)
+            and (
+                (not require_id and "id" not in row)
+                or (type(row.get("id")) is int and row["id"] > 0)
+            )
+            for row in batch
+        ):
+            raise KankaError("Invalid entity listing")
+        if len(batch) > MAX_PAGE_ROWS:
+            raise KankaError("Listing exceeded the page size safety limit")
+        return batch
+
+    @staticmethod
+    def _validate_page(
+        response: dict[str, Any], page: int, *, require_id: bool = True
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """Validate rows and paging without following API-supplied URLs."""
+        batch = KankaClient._validate_rows(response["data"], require_id=require_id)
+        meta, links = response.get("meta", {}), response.get("links", {})
+        if not isinstance(meta, dict) or not isinstance(links, dict):
+            raise KankaError("Invalid pagination metadata")
+        if "last_page" not in meta and "next" not in links:
+            raise KankaError("Missing pagination completeness metadata")
+        current = meta.get("current_page", page)
+        if type(current) is not int or current != page:
+            raise KankaError("Invalid pagination current_page")
+        next_link = links.get("next")
+        if next_link is not None and (
+            not isinstance(next_link, str) or not next_link.strip()
+        ):
+            raise KankaError("Invalid pagination next link")
+        last = meta.get("last_page")
+        if "last_page" in meta:
+            if type(last) is not int or last < page:
+                raise KankaError("Invalid pagination last_page")
+            has_next = page < last
+            if "next" in links and bool(next_link) != has_next:
+                raise KankaError("Inconsistent pagination metadata")
+        else:
+            has_next = bool(next_link)
+        return batch, has_next
+
+    async def _get_page(
+        self, path: str, page: int, *, require_id: bool = True
+    ) -> dict[str, Any]:
+        """Read one bounded page and explicitly mark whole-collection completeness."""
+        payload = await self._get(path, params={"page": page})
+        rows, has_next = self._validate_page(payload, page, require_id=require_id)
+        return {
+            "data": rows,
+            "next_page": page + 1 if has_next else None,
+            "complete": page == 1 and not has_next,
+            "missing_data": [],
+        }
+
     async def search_entities(
         self, campaign_id: int, query: str, *, page: int = 1
     ) -> dict[str, Any]:
-        """Search names and aliases within one campaign; return one API page.
+        """Read search candidates and verify their universal IDs in one campaign.
+
+        Current search responses have no paging metadata and cannot prove absence.
+        Their child_id field is not trusted: verified generic metadata supplies
+        module IDs. Legacy responses may instead provide a separate entity_id.
 
         Args:
             campaign_id: Authorized campaign ID.
@@ -259,19 +331,75 @@ class KankaClient:
         """
         self._check_campaign(campaign_id)
         self._check_id(page, "page")
-        if not isinstance(query, str) or not query.strip():
-            raise ValueError("query must be a non-empty string")
+        if not isinstance(query, str) or not query.strip() or len(query.strip()) > 1000:
+            raise ValueError(
+                "query must be a non-empty string of at most 1000 characters"
+            )
         safe_query = quote(query.strip(), safe="")
-        return await self._get(
-            f"campaigns/{campaign_id}/search/{safe_query}", params={"page": page}
-        )
+        path = f"campaigns/{campaign_id}/search/{safe_query}"
+        payload = await self._get(path, params={"page": page})
+        if "meta" not in payload and "links" not in payload:
+            if page != 1:
+                raise KankaError(
+                    "Search pagination is unavailable; use find_entities_by_name"
+                )
+            response = {
+                "data": self._validate_rows(payload["data"]),
+                "next_page": None,
+                "complete": False,
+                "missing_data": [
+                    {
+                        "source": API_BASE_URL + path,
+                        "reason": "pagination_unavailable",
+                    }
+                ],
+            }
+        else:
+            rows, has_next = self._validate_page(payload, page)
+            response = {
+                "data": rows,
+                "next_page": page + 1 if has_next else None,
+                "complete": page == 1 and not has_next,
+                "missing_data": [],
+            }
+        if len(response["data"]) > MAX_LINKED_RECORDS:
+            raise KankaError(
+                "Search has too many candidates; narrow the query "
+                "or use find_entities_by_name"
+            )
+        identities: dict[int, dict[str, Any]] = {}
+        for row in response["data"]:
+            if "campaign_id" in row and (
+                type(row["campaign_id"]) is not int or row["campaign_id"] != campaign_id
+            ):
+                raise KankaError(
+                    "Kanka returned search results from a different campaign"
+                )
+            universal_id = row.get("entity_id", row["id"])
+            if type(universal_id) is not int or universal_id <= 0:
+                raise KankaError("Invalid search entity ID")
+            if universal_id not in identities:
+                identities[universal_id] = await self.get_entity_metadata(
+                    campaign_id, universal_id
+                )
+            identity = identities[universal_id]
+            if (
+                not isinstance(row.get("name"), str)
+                or normalize("NFC", row["name"]).casefold()
+                != normalize("NFC", identity["name"]).casefold()
+            ):
+                raise KankaError("Kanka returned a mismatched search identity")
+            row.update(
+                entity_id=universal_id,
+                child_id=identity.get("child_id"),
+                entity_type=identity["entity_type"],
+            )
+        return response
 
-    async def get_entity(self, campaign_id: int, entity_id: int) -> dict[str, Any]:
-        """Resolve a universal entity ID and fetch its module-specific details.
-
-        Unknown custom modules return generic metadata without guessing a URL.
-        The related=1 option includes Kanka's available related resources.
-        """
+    async def get_entity_metadata(
+        self, campaign_id: int, entity_id: int
+    ) -> dict[str, Any]:
+        """Verify generic identity within a campaign, omitting embedded lore."""
         self._check_campaign(campaign_id)
         self._check_id(entity_id, "entity_id")
         response = await self._get(f"campaigns/{campaign_id}/entities/{entity_id}")
@@ -285,17 +413,38 @@ class KankaClient:
             or entity["campaign_id"] != campaign_id
         ):
             raise KankaError("Kanka returned an entity from a different campaign")
-        entity = {**entity, "entity_type": self._entity_type(entity)}
+        if not isinstance(entity.get("name"), str) or not entity["name"].strip():
+            raise KankaError("Invalid entity name")
+        return {
+            **{key: value for key, value in entity.items() if key != "child"},
+            "entity_type": self._entity_type(entity),
+        }
+
+    async def get_entity(self, campaign_id: int, entity_id: int) -> dict[str, Any]:
+        """Read verified module details; related collections use their own tools.
+
+        Unknown custom modules return metadata and an explicit missing-data marker.
+        """
+        entity = await self.get_entity_metadata(campaign_id, entity_id)
         endpoint = ENTITY_ENDPOINTS.get(entity["entity_type"])
         child_id = entity.get("child_id")
         if endpoint is None:
-            return {"entity": entity, "details": None}
+            return {
+                "entity": entity,
+                "details": None,
+                "missing_data": [
+                    {
+                        "source": (
+                            f"{API_BASE_URL}campaigns/{campaign_id}"
+                            f"/entities/{entity_id}"
+                        ),
+                        "reason": "unsupported_module",
+                    }
+                ],
+            }
         if type(child_id) is not int or child_id <= 0:
             raise KankaError("Invalid module child ID")
-        details = await self._get(
-            f"campaigns/{campaign_id}/{endpoint}/{child_id}",
-            params={"related": 1},
-        )
+        details = await self._get(f"campaigns/{campaign_id}/{endpoint}/{child_id}")
         record = details["data"]
         if (
             not isinstance(record, dict)
@@ -328,10 +477,190 @@ class KankaClient:
         self._check_campaign(campaign_id)
         self._check_id(entity_id, "entity_id")
         self._check_id(page, "page")
-        response = await self._get(
-            f"campaigns/{campaign_id}/entities/{entity_id}/posts",
-            params={"page": page},
+        response = await self._get_page(
+            f"campaigns/{campaign_id}/entities/{entity_id}/posts", page
         )
-        if not isinstance(response["data"], list):
-            raise KankaError("Invalid posts listing")
+        for row in response["data"]:
+            if type(row.get("entity_id")) is not int or row["entity_id"] != entity_id:
+                raise KankaError("Kanka returned posts from a different entity")
+        return response
+
+    async def get_entity_inventory(
+        self, campaign_id: int, entity_id: int, *, page: int = 1
+    ) -> dict[str, Any]:
+        """Read one inventory page, checking ownership and resolving linked items.
+
+        Item IDs belong to the items module. Each linked item is verified against
+        its universal record in the same campaign. Private/deleted links and the
+        per-page enrichment limit remain explicit in ``missing_data``.
+        """
+        self._check_campaign(campaign_id)
+        self._check_id(entity_id, "entity_id")
+        self._check_id(page, "page")
+        await self.get_entity_metadata(campaign_id, entity_id)
+        response = await self._get_page(
+            f"campaigns/{campaign_id}/entities/{entity_id}/inventory", page
+        )
+        items: dict[int, dict[str, Any] | None] = {}
+        for row in response["data"]:
+            if type(row.get("entity_id")) is not int or row["entity_id"] != entity_id:
+                raise KankaError("Kanka returned inventory from a different entity")
+            if type(row.get("is_equipped")) is not bool:
+                raise KankaError("Invalid inventory equipped status")
+            if type(row.get("amount")) not in (int, float, str):
+                raise KankaError("Invalid inventory amount")
+            if row.get("name") is not None and not isinstance(row["name"], str):
+                raise KankaError("Invalid inventory name")
+            item_id = row.get("item_id")
+            row["item"] = None
+            if item_id is None:
+                if not row.get("name"):
+                    response["missing_data"].append(
+                        {
+                            "source": (
+                                f"{API_BASE_URL}campaigns/{campaign_id}"
+                                f"/entities/{entity_id}/inventory"
+                            ),
+                            "reason": "missing_item_name",
+                        }
+                    )
+                continue
+            if type(item_id) is not int or item_id <= 0:
+                raise KankaError("Invalid inventory item ID")
+            path = f"campaigns/{campaign_id}/items/{item_id}"
+            if item_id not in items:
+                if len(items) >= MAX_LINKED_RECORDS:
+                    response["missing_data"].append(
+                        {
+                            "source": API_BASE_URL + path,
+                            "reason": "lookup_limit",
+                        }
+                    )
+                    continue
+                try:
+                    item = (await self._get(path))["data"]
+                    if (
+                        not isinstance(item, dict)
+                        or type(item.get("id")) is not int
+                        or item["id"] != item_id
+                        or type(item.get("entity_id")) is not int
+                        or item["entity_id"] <= 0
+                        or (
+                            "campaign_id" in item
+                            and (
+                                type(item["campaign_id"]) is not int
+                                or item["campaign_id"] != campaign_id
+                            )
+                        )
+                    ):
+                        raise KankaError(
+                            "Kanka returned mismatched inventory item details"
+                        )
+                    identity = await self.get_entity_metadata(
+                        campaign_id, item["entity_id"]
+                    )
+                    if (
+                        identity["entity_type"] != "item"
+                        or type(identity.get("child_id")) is not int
+                        or identity["child_id"] != item_id
+                        or not isinstance(item.get("name"), str)
+                        or normalize("NFC", identity.get("name", "")).casefold()
+                        != normalize("NFC", item["name"]).casefold()
+                    ):
+                        raise KankaError(
+                            "Kanka returned mismatched inventory item identity"
+                        )
+                    items[item_id] = {
+                        "id": item_id,
+                        "entity_id": item["entity_id"],
+                        "name": item["name"],
+                        "type": item.get("type"),
+                        "is_private": item.get("is_private"),
+                        "source": API_BASE_URL + path,
+                    }
+                except KankaError as error:
+                    if error.status_code not in (403, 404):
+                        raise
+                    items[item_id] = None
+                    response["missing_data"].append(
+                        {
+                            "source": API_BASE_URL + path,
+                            "reason": "unavailable",
+                        }
+                    )
+            row["item"] = items[item_id]
+            if not row.get("name") and row["item"] is not None:
+                row["name"] = row["item"]["name"]
+        response["complete"] = response["complete"] and not response["missing_data"]
+        return response
+
+    async def get_entity_relations(
+        self, campaign_id: int, entity_id: int, *, page: int = 1
+    ) -> dict[str, Any]:
+        """Read explicit relation edges, preserving direction and duplicate targets.
+
+        Related names are read from generic entity records in the same campaign.
+        A returned edge is not proof of a reciprocal edge or an inferred family tie.
+        """
+        self._check_campaign(campaign_id)
+        self._check_id(entity_id, "entity_id")
+        self._check_id(page, "page")
+        subject = await self.get_entity_metadata(campaign_id, entity_id)
+        response = await self._get_page(
+            f"campaigns/{campaign_id}/entities/{entity_id}/relations",
+            page,
+            require_id=False,
+        )
+        entities: dict[int, dict[str, Any] | None] = {entity_id: subject}
+        for row in response["data"]:
+            owner, target = row.get("owner_id"), row.get("target_id")
+            if any(type(value) is not int or value <= 0 for value in (owner, target)):
+                raise KankaError("Invalid relation endpoint ID")
+            if entity_id not in (owner, target):
+                raise KankaError("Kanka returned a relation for a different entity")
+            if not isinstance(row.get("relation"), str):
+                raise KankaError("Invalid relation label")
+            attitude = row.get("attitude")
+            if attitude is not None and (
+                type(attitude) is not int or not -100 <= attitude <= 100
+            ):
+                raise KankaError("Invalid relation attitude")
+            if "is_pinned" in row and type(row["is_pinned"]) is not bool:
+                raise KankaError("Invalid relation pinned status")
+            for role, related_id in (("owner", owner), ("target", target)):
+                path = f"campaigns/{campaign_id}/entities/{related_id}"
+                if related_id not in entities:
+                    if len(entities) - 1 >= MAX_LINKED_RECORDS:
+                        response["missing_data"].append(
+                            {
+                                "source": API_BASE_URL + path,
+                                "reason": "lookup_limit",
+                            }
+                        )
+                        row[f"{role}_name"] = None
+                        continue
+                    try:
+                        entities[related_id] = await self.get_entity_metadata(
+                            campaign_id, related_id
+                        )
+                    except KankaError as error:
+                        if error.status_code not in (403, 404):
+                            raise
+                        entities[related_id] = None
+                        response["missing_data"].append(
+                            {
+                                "source": API_BASE_URL + path,
+                                "reason": "unavailable",
+                            }
+                        )
+                related = entities[related_id]
+                row[f"{role}_name"] = related.get("name") if related else None
+            row["direction"] = (
+                "self"
+                if owner == target
+                else "outgoing"
+                if owner == entity_id
+                else "incoming"
+            )
+        response["complete"] = response["complete"] and not response["missing_data"]
         return response

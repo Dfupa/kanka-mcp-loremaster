@@ -81,11 +81,27 @@ async def test_unrestricted_token_can_list_all_campaigns() -> None:
 @pytest.mark.asyncio
 async def test_search_encodes_unicode_and_preserves_entity_ids():
     def handler(request):
+        if request.url.path.endswith("/entities/42"):
+            return httpx.Response(
+                200,
+                json={
+                    "data": {
+                        "id": 42,
+                        "campaign_id": 7,
+                        "name": "Weiss",
+                        "entity_type": "character",
+                        "child_id": 5,
+                    }
+                },
+            )
         assert request.url.path.endswith("/search/Ávilon Weiss")
         assert request.url.params["page"] == "2"
         return httpx.Response(
             200,
-            json={"data": [{"id": 5, "entity_id": 42, "name": "Weiss"}]},
+            json={
+                "data": [{"id": 5, "entity_id": 42, "name": "Weiss"}],
+                "meta": {"current_page": 2, "last_page": 2},
+            },
         )
 
     client = mock_client(handler)
@@ -97,7 +113,7 @@ async def test_search_encodes_unicode_and_preserves_entity_ids():
 
 
 @pytest.mark.asyncio
-async def test_get_entity_uses_child_id_and_related_flag():
+async def test_get_entity_uses_child_id_without_implicit_related_collections():
     requested = []
 
     def handler(request):
@@ -116,7 +132,7 @@ async def test_get_entity_uses_child_id_and_related_flag():
                 },
             )
         assert request.url.path.endswith("/characters/5")
-        assert request.url.params["related"] == "1"
+        assert "related" not in request.url.params
         return httpx.Response(
             200,
             json={"data": {"id": 5, "entity_id": 42, "name": "Weiss", "entry": "Lore"}},
@@ -146,6 +162,7 @@ async def test_custom_entity_is_not_guessed():
             json={
                 "data": {
                     "id": 42,
+                    "name": "Custom record",
                     "campaign_id": 7,
                     "entity_type": "custom-module",
                     "child_id": 1,
@@ -177,7 +194,13 @@ async def test_does_not_request_disallowed_campaign():
 async def test_posts_use_universal_entity_id():
     def handler(request):
         assert request.url.path == "/1.0/campaigns/7/entities/42/posts"
-        return httpx.Response(200, json={"data": [{"id": 55, "name": "History"}]})
+        return httpx.Response(
+            200,
+            json={
+                "data": [{"id": 55, "entity_id": 42, "name": "History"}],
+                "meta": {"last_page": 1},
+            },
+        )
 
     client = mock_client(handler)
     try:

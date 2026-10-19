@@ -1,4 +1,4 @@
-name: Read-only character lookup
+name: Read-only MCP demonstrations
 
 on:
   workflow_dispatch:
@@ -20,7 +20,7 @@ jobs:
           python-version: '3.13'
       - name: Install existing read-only LoreMaster client
         run: python -m pip install -e .
-      - name: Verify character identities (GET only; public-safe diagnostics)
+      - name: Verify MCP descriptions, inventory and relations (GET only)
         env:
           KANKA_API_TOKEN: ${{ secrets.KANKA_API_TOKEN }}
-        run: python scripts/verify_character_lookup.py
+        run: python scripts/verify_mcp.py
