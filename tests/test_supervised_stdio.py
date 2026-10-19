@@ -76,10 +76,10 @@ async def test_real_stdio_with_separate_local_review_process(tmp_path):
                 async with ClientSession(reader, writer) as session:
                     await session.initialize()
                     tools = (await session.list_tools()).tools
-                    assert len(tools) == 14
+                    assert len(tools) == 21
                     assert (
                         sum(tool.annotations.readOnlyHint is False for tool in tools)
-                        == 5
+                        == 12
                     )
                     assert not any(
                         "approve" in tool.name or "revoke" in tool.name

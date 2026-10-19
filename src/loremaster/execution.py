@@ -3,16 +3,19 @@
 import asyncio
 import sqlite3
 from typing import Any
+from unicodedata import normalize
 
 import httpx
 
 from loremaster.aggregate import get_entity_full
 from loremaster.approvals import LocalApprovals
 from loremaster.creation import (
+    CREATION_ENDPOINTS,
     ApprovedCreation,
+    CharacterDraft,
     CreationDraft,
     CreationScope,
-    ItemDraft,
+    EntityPostDraft,
     OrganisationDraft,
     creation_kind,
     preview_creation,
@@ -22,6 +25,7 @@ from loremaster.creation import (
 )
 from loremaster.kanka import API_BASE_URL, KankaClient, KankaError
 from loremaster.verification import (
+    creation_details,
     matches_creation_fields,
     verify_created,
     verify_result_ids,
@@ -106,16 +110,36 @@ class CreationService:
                 result["item_ids"][str(uid)] = linked["details"]["id"]
         return result
 
+    async def _name_exists(self, draft: CreationDraft) -> bool:
+        """Posts have an owner-local namespace; core entities use campaign lookup."""
+        if isinstance(draft, EntityPostDraft):
+            rows = await self.reader._list_rows(
+                f"campaigns/{draft.campaign_id}/entities/{draft.entity_id}/posts"
+            )
+            if len({row["id"] for row in rows}) != len(rows) or any(
+                type(row.get("entity_id")) is not int
+                or row["entity_id"] != draft.entity_id
+                or not isinstance(row.get("name"), str)
+                for row in rows
+            ):
+                raise KankaError("Invalid post collection identity")
+            name = normalize("NFC", draft.name).casefold()
+            return any(
+                normalize("NFC", row["name"].strip()).casefold() == name for row in rows
+            )
+        return bool(
+            (await self.reader.find_entities_by_name(draft.campaign_id, draft.name))[
+                "exact"
+            ]
+        )
+
     async def prepare(self, draft: CreationDraft) -> dict[str, Any]:
         """Resolve references and save a proposal; issue no approval or POST."""
         draft = validate_creation_draft(draft)
         self.scope.check(draft)
         async with self.reader.account_reads():
             refs = await self._references(draft)
-            matches = await self.reader.find_entities_by_name(
-                draft.campaign_id, draft.name
-            )
-            if matches["exact"]:
+            if await self._name_exists(draft):
                 raise ValueError(
                     "Entity name already exists; resolve the conflict first"
                 )
@@ -231,10 +255,7 @@ class CreationService:
         journal.bind(proposal_id, approved, module_ids)
         uid = progress.get(kind, {}).get("entity_id")
         if uid is None:
-            matches = await self.reader.find_entities_by_name(
-                draft.campaign_id, draft.name
-            )
-            if matches["exact"]:
+            if await self._name_exists(draft):
                 raise ValueError("Entity name already exists; no creation was sent")
         else:
             await self._verify(draft, progress, module_ids)
@@ -300,6 +321,10 @@ class CreationService:
                     or data[owner] <= 0
                     or (key != kind and data[owner] != expected_owner)
                     or (
+                        isinstance(draft, EntityPostDraft)
+                        and data["entity_id"] != draft.entity_id
+                    )
+                    or (
                         key.startswith("member:")
                         and (
                             type(data.get("character_id")) is not int
@@ -327,7 +352,11 @@ class CreationService:
             "entity_type": kind,
             "status": "verified",
             "entity_id": uid,
-            "child_id": progress[kind]["id"],
+            **(
+                {"post_id": progress[kind]["id"]}
+                if isinstance(draft, EntityPostDraft)
+                else {"child_id": progress[kind]["id"]}
+            ),
             "completed": list(progress),
             "sources": bundle["sources"],
             "reviewed_by": approved.approved_by,
@@ -342,6 +371,30 @@ class CreationService:
         self._active_step = "verification"
         kind = creation_kind(draft)
         uid = progress[kind]["entity_id"]
+        if isinstance(draft, EntityPostDraft):
+            if uid != draft.entity_id:
+                raise KankaError("Created post owner changed")
+            await self.reader.get_entity(draft.campaign_id, uid)
+            base = f"campaigns/{draft.campaign_id}/entities/{uid}"
+            path = f"{base}/posts/{progress[kind]['id']}"
+            record = (await self.reader._get(path))["data"]
+            if (
+                not isinstance(record, dict)
+                or type(record.get("id")) is not int
+                or record["id"] != progress[kind]["id"]
+            ):
+                raise KankaError("Created post ID changed")
+            bundle = {
+                "details": record,
+                "sections": {},
+                "missing_data": [],
+                "sources": {
+                    "entity": API_BASE_URL + base,
+                    "post": API_BASE_URL + path,
+                },
+            }
+            verify_created(draft, bundle, module_ids)
+            return bundle
         if isinstance(draft, OrganisationDraft):
             core = await self.reader.get_entity(draft.campaign_id, uid)
             members = await self.reader.get_organisation_members(draft.campaign_id, uid)
@@ -365,7 +418,7 @@ class CreationService:
                     )
                 }
             )
-        elif isinstance(draft, ItemDraft):
+        elif not isinstance(draft, CharacterDraft):
             core = await self.reader.get_entity(draft.campaign_id, uid)
             base = f"{API_BASE_URL}campaigns/{draft.campaign_id}"
             bundle = {
@@ -374,7 +427,8 @@ class CreationService:
                 "missing_data": [],
                 "sources": {
                     "entity": f"{base}/entities/{uid}",
-                    "details": f"{base}/items/{progress[kind]['id']}",
+                    "details": f"{base}/{CREATION_ENDPOINTS[kind]}/"
+                    f"{progress[kind]['id']}",
                 },
             }
             partial = draft
@@ -420,12 +474,32 @@ class CreationService:
         body, key = pending["body"], pending["key"]
         kind = creation_kind(self.store.draft(proposal_id))
         async with self.reader.account_reads():
-            if key == kind:
-                if pending["path"] != f"campaigns/{campaign_id}/{kind}s":
+            draft = self.store.draft(proposal_id)
+            if isinstance(draft, EntityPostDraft):
+                expected_path, _body = resolve_creation_request(draft, kind)
+                if pending["path"] != expected_path:
+                    raise ValueError("Invalid pending post path")
+                record = (await self.reader._get(f"{expected_path}/{candidate_id}"))[
+                    "data"
+                ]
+                candidates = (
+                    [record]
+                    if isinstance(record, dict)
+                    and type(record.get("id")) is int
+                    and record["id"] == candidate_id
+                    else []
+                )
+            elif key == kind:
+                if (
+                    pending["path"]
+                    != f"campaigns/{campaign_id}/{CREATION_ENDPOINTS[kind]}"
+                ):
                     raise ValueError("Invalid pending entity path")
                 core = await self.reader.get_entity(campaign_id, candidate_id)
                 candidates = (
-                    [core["details"]] if core["entity"]["entity_type"] == kind else []
+                    [creation_details(draft, core)]
+                    if core["entity"]["entity_type"] == kind
+                    else []
                 )
             elif key.startswith("member:"):
                 uid = self.store.journal.progress(proposal_id)[kind]["entity_id"]

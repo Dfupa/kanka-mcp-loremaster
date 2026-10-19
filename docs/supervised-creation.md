@@ -101,7 +101,9 @@ this slice and fail validation.
 `execute_creation` accepts only campaign/proposal IDs and executes any supported
 stored draft. The original `execute_character_creation` alias rejects other
 draft types before consuming approval. Default startup is unchanged; opt-in
-startup now registers fourteen tools. Existing persisted character payloads keep
+startup now registers twenty-one tools, including standalone posts, location
+creation and the five additional core types
+documented in [additional entities](additional-entities.md). Existing persisted character payloads keep
 their original format, while organization/item proposals explicitly bind their
 type in the review payload. No database schema migration is required.
 
@@ -155,8 +157,9 @@ stored proposal label still says approved.
 For uncertain outcomes, the local `reconcile` command:
 
 1. Requires matching write configuration and a token for scoped GET-only reads.
-2. Inspects an explicitly selected candidate: universal entity ID for a core
-   character/organization/item; record ID for relation/inventory/post/membership. Missing, inaccessible,
+2. Inspects an explicitly selected candidate: universal entity ID for a supported
+   core entity; record ID for relation/inventory/post/membership. Standalone post
+   proposals also take a post record ID, not their owner's universal ID. Missing, inaccessible,
    incomplete, ambiguous or mismatching evidence fails closed.
 3. Displays the matching record and request fingerprint. The local reviewer must
    stop creation workers and verify the record's origin, then type the exact

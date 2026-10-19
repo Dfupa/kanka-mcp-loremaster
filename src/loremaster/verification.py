@@ -1,16 +1,33 @@
 """Compare scoped creation read-back to the approved fields and response IDs."""
 
 from decimal import Decimal, InvalidOperation
+from html import escape
 from typing import Any
 
 from loremaster.creation import (
+    CharacterDraft,
     CreationDraft,
-    ItemDraft,
     OrganisationDraft,
     creation_kind,
     resolve_creation_request,
 )
 from loremaster.kanka import KankaError
+
+
+def entry_matches(expected: Any, actual: Any) -> bool:
+    """Accept exact text or Kanka's single paragraph around plain text only."""
+    return (
+        isinstance(expected, str)
+        and isinstance(actual, str)
+        and (
+            expected == actual
+            or (
+                "<" not in expected
+                and ">" not in expected
+                and actual == f"<p>{escape(expected, quote=False)}</p>"
+            )
+        )
+    )
 
 
 def matches_creation_fields(expected: dict[str, Any], actual: dict[str, Any]) -> bool:
@@ -19,7 +36,10 @@ def matches_creation_fields(expected: dict[str, Any], actual: dict[str, Any]) ->
         if key == "two_way":
             continue  # Request-only field; no live one-way guarantee is inferred.
         observed = actual.get(key)
-        if key in ("races", "locations"):
+        if key == "entry":
+            if not entry_matches(value, observed):
+                return False
+        elif key in ("races", "locations", "tags"):
             if (
                 not isinstance(observed, list)
                 or any(type(uid) is not int or uid <= 0 for uid in observed)
@@ -70,7 +90,7 @@ def verify_created(
         not part["complete"] for part in bundle["sections"].values()
     ):
         raise KankaError("Created entity could not be read back completely")
-    details = bundle["details"]
+    details = creation_details(draft, bundle)
     _path, core = resolve_creation_request(
         draft, creation_kind(draft), module_ids=module_ids
     )
@@ -88,7 +108,7 @@ def verify_created(
                 for index in range(len(draft.members))
             ]
         }
-    elif isinstance(draft, ItemDraft):
+    elif not isinstance(draft, CharacterDraft):
         expected = {}
     else:
         expected = {
@@ -120,3 +140,19 @@ def verify_created(
                     break
             else:
                 raise KankaError(f"Created {section} differ from the approved draft")
+
+
+def creation_details(draft: CreationDraft, bundle: dict[str, Any]) -> dict[str, Any]:
+    """Verify requested parent IDs from generic metadata, where Kanka exposes them."""
+    details = bundle["details"]
+    parent = getattr(draft, "parent_entity_id", None)
+    if parent is None:
+        return details
+    observed = bundle.get("entity", {}).get("parent_id")
+    if type(observed) is not int or observed != parent:
+        raise KankaError("Created entity parent differs from the approved draft")
+    if "parent_id" in details and (
+        type(details["parent_id"]) is not int or details["parent_id"] != observed
+    ):
+        raise KankaError("Module and generic parent identities disagree")
+    return {**details, "parent_id": observed}

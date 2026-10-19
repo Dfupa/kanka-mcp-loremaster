@@ -16,15 +16,37 @@ The system must know the difference between **reading established lore** and
   (note this exact spelling; not `kanka-loremaster-mcp`).
 - **Owner:** `Dfupa`; **license:** MIT; **repository visibility:** PUBLIC.
 - **Default branch:** `main`.
-- **Active development branch:** `feat/supervised-item-creation`, created from
-  merged `origin/main` at `0a1987d1ee42433599454686a1856d207fbfaa83`.
-- **Completed reviews:** PRs #1, #2 and #3 were merged by the user. Their remote
-  feature branches were deleted; do not recreate them or add work to them.
-- **Current slice:** organization creation with character memberships first,
-  then item proposals/execution, reusing supervised approval and durable progress.
-  Keep PR #4 in draft. Initial validation was offline-only. The user subsequently
-  reviewed the draft and explicitly authorized one public synthetic live test,
-  including recreating the two deleted synthetic character dependencies.
+- **Active development branch:** `feat/supervised-editing`, created from merged
+  `origin/main` at `5f7f2ac8f191e1867536596acfa807c5a0f68b65`.
+- **Completed reviews:** PRs #1–#4 were merged by the user. Their remote feature
+  branches were deleted; do not recreate them or add work to them.
+- **Current slice:** the user accepted and expanded supervised editing to
+  character name/description/age/sex/species/location/tags, one post, an inventory
+  entry and an outgoing relationship. Implement and validate locally;
+  see `docs/supervised-editing.md`. The implementation is ready for draft-PR review.
+  The user confirmed the live edits in Kanka's UI, then requested family, mission
+  (quest), map, diary (journal) and note creation/editing before canon-aware notes.
+  These additional core paths are implemented locally with offline testing only;
+  see `docs/additional-entities.md`. Do not start session-note proposals yet.
+  The user then authorized five exact public synthetic creations in the existing
+  Hidros test dataset, including a location, Duncan-linked quest/diary, note and
+  the synthetic character's family. Actual family assignment is setup; defer the
+  broader entity editing trial until requested after creation acceptance.
+  The user has now requested Duncan's additional residence/family assignment,
+  three separate Posts-tab edits and two child creations in that test dataset.
+  The user explicitly distinguished posts from main descriptions; preserve the
+  latter. Empty Posts tabs need public labeled test-post fixtures before editing.
+- **Latest publication authorization:** the user explicitly requested a Git tree,
+  commit and PR for the completed slice. Commit on `feat/supervised-editing`, push
+  that feature branch and open a draft PR against `main`; inspect its exact-commit
+  CI. Do not merge, delete branches or perform new live writes. This supersedes
+  the earlier publication restriction recorded in historical evidence below.
+  No destructive commands. Continue
+  authorized local development/testing without routine confirmation. The user
+  subsequently authorized the synthetic-mentor core edit and five exact follow-up
+  edits: second post, compass quantity, outgoing relation label, mentor tag
+  assignment replacement and an existing species' description. These grant no
+  standing write permission. Scoped live acceptance is recorded below.
 - Preserve the user's untracked `codex_kanka_loremaster_AGENTS.md` unchanged.
   Test fixtures stay outside the release package; do not add synthetic MCP tools
   or retain campaign-specific one-off helpers in the product.
@@ -42,7 +64,9 @@ branch are allowed. The user's authorization for Kanka has been **READ-ONLY**.
 There is no standing authorization to create, modify, delete, transform, or
 otherwise persist anything in any Kanka campaign.
 Offline rehearsals and development of opt-in supervised character, organization,
-membership and item creation are authorized. A subsequent explicit exception
+membership and item creation, plus the listed character/attachment edits and
+family/quest/map/journal/note creation/editing, are
+authorized. A subsequent explicit exception
 authorized one public synthetic live acceptance run through the MCP executor.
 It does not grant standing campaign write permission. The normal server remains
 read-only. Enabling its optional creation tools requires explicit local database,
@@ -98,15 +122,16 @@ Run the commands in this order and examine the final CI run for the exact commit
 Do not equate a Ruff formatting failure with a failing test suite: GitHub's
 workflow stops before `pytest` when its earlier steps fail.
 
-## 3. Verified implementation and current development (2026-10-19)
+## 3. Verified implementation and current development (2026-10-20)
 
 Read current Git/remote state at session start; this is a handoff snapshot.
 
-- **Merged baseline:** PR #3's feature tip
-  `cb076ba5f847b1b38d1e8a9f2815aea1175c63fa`; main merge `0a1987d`.
-  Baseline Ruff/CI passed with **416 tests**:
-  https://github.com/Dfupa/kanka-mcp-loremaster/actions/runs/39291728407.
-  This is historical evidence, not the CI result for subsequent changes.
+- **Merged baseline:** PR #4's feature tip
+  `30a9a9b5284d1fac9c06a6167b569f83d39382ad`; main merge `5f7f2ac`.
+  Baseline Ruff/CI passed with **460 tests**:
+  https://github.com/Dfupa/kanka-mcp-loremaster/actions/runs/39301721210.
+  This is historical evidence for that exact feature tip, not a CI result for
+  later editing changes. The authorized live acceptance is recorded below.
 - `kanka.py` remains a GET-only HTTPX reader with campaign scope, verified
   universal/module IDs, pagination, bounded 429 backoff and enrichment.
 - `aggregate.py` combines core/module fields and eleven direct sections:
@@ -132,15 +157,161 @@ Read current Git/remote state at session start; this is a handoff snapshot.
   final field/ID read-back are required. It does not edit/delete, roll back,
   automatically reconcile or retry unknown outcomes. Approval is refused while
   intent is uncertain; reconciliation must precede fresh approval.
-- Default startup still has eight read-only tools. Opt-in startup now has
-  **fourteen tools**: the reads plus character/organization/item preparation,
+- Default startup still has eight read-only tools. Creation-only opt-in has
+  **twenty-one tools**: the reads plus standalone post, character/organization/item and
+  family/quest/map/journal/note/location preparation,
   generic `execute_creation`, the compatible character-only execution alias,
   and `get_creation_status`. Every operation still needs explicit backend scope.
   Approval/revocation/reconciliation remain separate local host actions.
-- The three finite draft types share preview, approval, POST transport, journal
+- Explicit `.update` operation scope adds thirteen tools in normal startup, for
+  **thirty-four total**: character/species/family/quest/map/journal/note and
+  post/inventory/relation/tag-assignment preparation,
+  `execute_edit`, and `get_edit_status`. A directly injected editing-only service
+  has twenty-one tools. Creation permissions never grant editing permissions.
+- `edit_models.py` defines strict changes and derives minimal PATCH diffs.
+  References use universal IDs and resolve verified module IDs; attachment IDs
+  select exact records. Species/location/tag arrays explicitly replace assignments
+  (including reviewed `[]`); null/blank text and no-op edits are rejected.
+  The additional species tool accepts description only under `race.update`,
+  verifies a race entity and derives the module endpoint. Inventory payloads bind
+  preserved owner/item-or-name/amount fields required by the API; diffs show only
+  changes. Requested plain descriptions allow the exact observed paragraph wrapper
+  during read-back; untouched descriptions retain strict comparison.
+- `edit_store.py` adds private edit rows alongside unchanged creation storage.
+  Its checksum binds PATCH method/path/body, baseline and reference identities.
+  Approval is expiring, atomic and single-use, through `approve --kind edit` only.
+  Uncertain intent blocks new proposals and sends for the same character.
+- `editing.py` owns a separate PATCH client, campaign/operation scope, stale
+  baseline checks, per-send approval and independent read-back. It edits one
+  record per proposal; no arbitrary path, deletion, transfer or rollback. A
+  pre-send GET is not an upstream atomic version lock. Unknown results cannot be
+  resent; GET-only local reconciliation requires stopped-worker/origin review.
+  Confirmed writes with failed verification can only retry reads after approval.
+- Offline coverage includes real stdio and local
+  terminal approval processes with mandatory mocked transports, core/reference
+  edits and exact attachment updates, untouched siblings, partial/malformed
+  responses, privacy, pagination, stale data, replay, restart and reconciliation.
+- **Previous editing verification:** required install → Ruff format → lint → format
+  check → Pytest sequence passed; after the live-discovered fixes, Ruff format,
+  lint, format check and full Pytest passed with **623 tests** (163 above merged baseline).
+  Wheel/source matching, excluded development fixtures, credential-shaped token
+  scan, wheel imports/tool registration and optimized-mode runtime guards passed.
+  At that checkpoint the work was unpublished, with no new GitHub CI run. A later authorized
+  live character-core edit and five follow-up edits passed as recorded below.
+  Collection clearing and other untested update combinations remain unverified live.
+
+**First live editing acceptance:** after accepting the safeguards, the user
+authorized an exact synthetic-mentor edit: name, text age/sex, one existing species
+and one existing tag. Fresh campaign/type-specific name resolution was unique.
+The normal stdio MCP server prepared a five-field diff and rejected unapproved
+execution. A separate local terminal approval under that user authorization
+enabled one character PATCH. The executor and independent MCP read-back verified
+all requested values, stable identity, preserved description/location/privacy and
+other core guard fields. Completed status, consumed-approval replay denial,
+reopened journal, token-free storage and normal shutdown passed. No production
+code changes were needed. The private report/helper and live IDs/payloads stay
+outside Git. This validates additions from empty species/tag lists in one
+account/campaign, not collection clearing, replacement of nonempty lists or
+attachment editing. No deletion or further live writes are authorized.
+
+**Authorized live follow-up acceptance:** the user then authorized exactly five
+edits: second synthetic post text, compass quantity, outgoing mentor relationship
+label, replacement of the mentor's existing tag assignment and an established
+species' description. All five completed through normal MCP stdio, separate local
+approval and independent GET checks. The first post and retained guard fields
+were preserved. Completed/reopened status, replay denial and token-free journal
+checks passed. The credential host exited. No cleanup or deletion was performed.
+
+The trial required narrow API compatibility fixes: exact paragraph wrapping of
+requested plain text, preserved required inventory fields after a rejected 422,
+tag detail/list corroboration when responses omit assignment IDs, and explicit
+null core-description baselines. The rejected inventory proposal was revoked and
+replaced; the confirmed post verification retried reads only. Regression coverage
+includes species description, missing-ID tags and entry verification; the actual
+SDK mocked stdio flow now includes species editing. See `docs/supervised-editing.md`.
+Keep private live helpers/reports and campaign payloads outside Git. These
+completed trials grant no further live write permission. Nonempty tag assignment
+replacement is verified; collection clearing remains unverified live.
+- Ten finite draft types (nine core types and one standalone post) share preview,
+  approval, POST transport, journal
   and verification. Existing character payloads without a type discriminator
   remain readable. New organization/item payloads bind an explicit type into
   the stored review digest. Unknown types/fields fail closed.
+- Additional family/quest/map/journal/note core contracts reuse the existing
+  separate approval/execution flows. Each has its own `.create` and `.update`
+  permission. Creation takes a typed `draft` object; editing uses universal target
+  IDs and typed `changes`. Tags/locations resolve verified module IDs; quest
+  instigator and journal author remain documented universal entity IDs. Dates are
+  literal text subject to Kanka validation, not fantasy-calendar conversion.
+  Family trees/membership rewrites, quest elements, map uploads/markers/layers,
+  existing-hierarchy/status changes and calendar configuration are excluded. Returned
+  member/quest/map/calendar fields guard metadata edits; unenriched subresources
+  are not claimed to have been independently verified. No new live writes occurred.
+  The real stdio offline workflow makes five POSTs and five PATCHes through local
+  approvals, GET read-back, replay denial, journal reopening and client shutdown.
+  Shared description verification accepts only the previously observed plain-text
+  paragraph wrapper. Family endpoints use `families`, including reconciliation.
+  Existing creation payloads/fingerprints remain compatible; no schema migrations.
+- **Previous local extension verification:** editable install → Ruff format → lint →
+  format check → full Pytest passed with **759 tests** (136 new). Wheel/source
+  matching, fixture exclusion, credential-shaped content checks, wheel imports,
+  default/creation/edit-only/combined tool registration (8/19/21/32) and optimized
+  runtime guards passed. All new-type HTTP was mocked; no new live writes or CI.
+- **Latest setup verification:** location creation and real character family
+  assignment were added for the explicitly authorized live dataset. Location
+  metadata includes optional title/type/tags and has its own `location.create`
+  scope; location editing is not implemented. `family_entity_ids` resolves family
+  module IDs and explicitly replaces the character's public family list, retaining
+  guarded private assignments. Required local checks passed with **766 tests**;
+  the updated wheel passed source/fixture/credential/import/optimized validation
+  and tool counts **8/20/21/33**. No GitHub CI or publication was performed.
+- **Latest post/child verification:** required local checks passed with **799
+  tests** (33 new). Standalone `EntityPostDraft` adds posts to an existing verified
+  owner under `post.create`, with owner-local duplicate checks and exact read-back.
+  Results distinguish `entity_id` (owner) from `post_id`; reconciliation takes a
+  post record ID. Post editing now supports verified non-character owners while
+  preserving owner-specific guards. Quest/note creation accepts universal
+  `parent_entity_id`, verifies a same-type parent and binds `parent_id` into review
+  and read-back. Existing records cannot be reparented. The actual mocked stdio
+  flow covers child creation and three separate post create/edit pairs with local
+  terminal approvals (sixteen writes). Wheel/source/fixture/credential/import and
+  optimized checks passed with tool counts **8/21/21/34**. No new CI or publication.
+  Live parent read-back exposed `parent_id` only in generic metadata, absent from
+  quest module details. Shared creation verification/reconciliation now validates
+  that explicit source and rejects missing/wrong/conflicting identities. A
+  confirmed child creation resumed with reads only after fresh approval; it was
+  not created again. Regression tests cover this response shape and recovery.
+
+**Authorized Posts-tab/child acceptance:** the user explicitly requested additional
+residence/family assignments for the existing synthetic character, three separate
+post edits on quest/journal/note owners, a child quest and a child note. The user
+clarified Posts tabs rather than main descriptions. Empty tabs received labeled
+public post fixtures before their exact-ID edits. Nine proposals completed through
+normal stdio and separate local approvals: one character PATCH, three post POSTs,
+three post PATCHes and two child core POSTs. Independent reads confirmed profile
+assignments, both family members, post content/public visibility, retained main
+descriptions and correct universal parents. The child quest's confirmed write
+resumed verification only after the generic-parent fix; no second creation POST.
+All proposals reopened complete, replay denial and token-free storage passed.
+No deletion, existing-record reparenting, Git publication or new CI occurred.
+Private live IDs, payloads and one-off helpers/reports remain outside Git. This
+adds no standing write permission; map and other untested edit fields remain open.
+
+**Authorized additional-entity creation acceptance:** the user requested exactly
+five public synthetic records in the existing test campaign: location, mentor-
+instigated quest, mentor-authored diary, note and the synthetic character's family.
+Fresh campaign/type resolution and name-collision checks passed. Normal MCP stdio
+and separate local approval created and independently verified all five. A scoped
+character PATCH assigned the actual family, preserving prior assignments and
+guarded fields; independent GETs checked character families and reverse family
+members. Six proposals reopened complete, and replay denial/token-free storage/
+shutdown checks passed. One note POST received a known rejected 429; cooldown and
+fresh local approval of the same immutable proposal preceded its successful retry.
+No unknown outcome was retried. Private reports, helpers, live IDs and payloads
+remain outside Git. No deletion occurred. Location creation and these four core
+creation types are live-verified for this scope; map creation was not requested.
+The broader entity-editing trial still awaits user-selected changes. This grants
+no standing campaign write permission. Publication is now separately authorized.
 - Organization members use universal character IDs in proposals, then module
   IDs in `organisations/{organisation.id}/organisation_members`. Core and member
   creation have separate operation classes. Membership list reads verify owner,
@@ -158,7 +329,8 @@ Read current Git/remote state at session start; this is a handoff snapshot.
   and request-only `two_way` is not a live one-way guarantee.
 - `.github/workflows/tests.yml` runs offline checks without credentials. The live
   verification workflow remains manually dispatched, GET-only, repository scoped
-  and guarded to `feat/supervised-item-creation`. Do not remove secret protections.
+  and still guarded to the deleted `feat/supervised-item-creation` branch. It is
+  inactive for this local editing slice; do not dispatch it or remove protections.
 - `scripts/private_kanka_check.py` is legacy, retained and unused; never run it
   automatically. No credentials, campaign dumps or live test IDs belong in Git.
 - Desktop-host UI, remote hosting, multi-user authentication, inventory per-entry
@@ -501,25 +673,35 @@ player persona. Separate suggestions from successful persisted operations.
 - Never enable deletion or automatic canon rewriting as a side effect of
   implementing an apparently read-only feature.
 
-### Current agreed slice — Organization membership and supervised items
+### Current agreed slice — Expanded supervised character editing
 
-1. Continue on `feat/supervised-item-creation`, based on merged PR #3. Preserve
-   the untracked handoff copy. Keep commits focused and the new PR in draft.
-2. Organization creation and two actual memberships (synthetic Éldan and mentor)
-   were added before item creation. Both use the same local approval, scope,
-   durable progress and read-back path. Automated tests remain offline-only;
-   a separate public synthetic live acceptance run was subsequently authorized.
-3. The complete stdio scenario creates mentor → compass item → Éldan with
-   relation/inventory/two posts → organization with both characters as members.
-   Each entity is its own explicitly approved proposal. Returned universal and
-   module IDs bind later steps. Ten mocked POSTs; no direct setup writes, generic
-   batch transaction, live IDs or automatic deletion.
-4. Run install, Ruff format/check/format-check and full Pytest in order before
-   pushing; inspect CI for the exact published commit. Historical live character
-   acceptance alone does not establish live organization/member/item API behavior.
-5. Full canon-aware session-note processing, broader edits, uploads, transfers,
-   automatic modes and remote authentication remain future milestones. The user
-   explicitly asked to ignore the observed relation mirroring as a blocker.
+1. Work on `feat/supervised-editing` from merged PR #4. Preserve the untracked
+   handoff copy. The user accepted the design and expanded its listed edit scope.
+   Publication is now authorized: commit and push this branch, open a draft PR,
+   and inspect CI. Merge remains with the user.
+2. Implement `docs/supervised-editing.md`: character fields/species/location/tags,
+   one specific post, inventory entry and outgoing relationship, each as an
+   explicitly reviewed proposal. Existing visibility and unrelated records stay
+   guarded. Shared tag definitions and incoming-edge ownership are not inferred.
+3. Preserve existing creation storage and approval behavior. New edit rows bind
+   method/baseline evidence without reinterpreting old POST journal records.
+4. Prove the edit slice offline through actual MCP stdio plus separate
+   terminal approval. Cover stale changes, uncertain outcomes, reviewed recovery,
+   read-back and existing creation-database compatibility. No automatic retries
+   or rollback. A pre-send GET is not an upstream atomic version lock.
+5. Organization/item core edits, membership edits, visibility changes, transfers,
+   uploads, automatic modes and remote authentication remain separate milestones.
+   Canon-aware session-note proposals follow core editing. The user asked to ignore
+   the previously observed relation mirroring; do not claim a one-way guarantee.
+
+**Current next milestone:** the user requires family, quest, map, journal and note
+creation/editing before canon-aware session-note proposals. The core extension is
+implemented locally; review `docs/additional-entities.md` and its evidence. The
+user subsequently authorized five exact public creations in the existing synthetic
+test dataset, including location creation and the character-family assignment.
+The broader editing trial needs concrete user-selected edits after this creation
+acceptance. Map creation was not requested in that live dataset run. Publish the
+completed slice for review and preserve the user's untracked handoff copy.
 
 Image attachment remains later work. Do not promise a generated-image-to-Kanka
 handoff based on metadata reads; uploads need separate authorization and tests.
@@ -542,7 +724,11 @@ authorized runner without exposing it. Live workflow dispatch requires its file
 on the default branch; retain repository/branch guards and secret protections.
 
 **Continuation:** read this file and `docs/supervised-creation.md`, inspect the
-current draft PR/CI, and review the opt-in local approval/execution slice.
+merged baseline/CI and `docs/supervised-editing.md`. Continue the accepted expanded
+editing implementation and its expanded creation/post/child acceptance evidence.
+The user now authorizes its feature-branch commit, push and draft PR. Verify the
+resulting PR and exact-commit CI; do not assume either exists or passed from this
+handoff alone. Respect the no-destructive-command constraint and do not merge.
 Default startup stays read-only. New live writes need separately reviewed scope
 and exact proposals; no automatic cleanup is authorized. Preserve user files and
 keep credentials and live campaign data out of this public repository.
