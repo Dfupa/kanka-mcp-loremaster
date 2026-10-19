@@ -550,6 +550,45 @@ class KankaClient:
             raise KankaError("Kanka returned a mismatched module name")
         return {"entity": entity, "details": record}
 
+    async def get_organisation_members(
+        self, campaign_id: int, entity_id: int
+    ) -> dict[str, Any]:
+        """Read all memberships through a verified organisation's module ID.
+
+        A missing pagination contract, invalid owner, duplicate record ID or
+        incomplete listing fails closed. No membership origin is inferred.
+        """
+        entity = await self.get_entity_metadata(campaign_id, entity_id)
+        organisation_id = entity.get("child_id")
+        if entity["entity_type"] != "organisation":
+            raise ValueError("Membership owner must identify an organisation")
+        self._check_id(organisation_id, "organisation_id")
+        path = (
+            f"campaigns/{campaign_id}/organisations/{organisation_id}"
+            "/organisation_members"
+        )
+        rows = await self._list_rows(path)
+        if len({row["id"] for row in rows}) != len(rows):
+            raise KankaError("Organisation membership record IDs are duplicated")
+        for row in rows:
+            if (
+                type(row.get("organisation_id")) is not int
+                or row["organisation_id"] != organisation_id
+                or type(row.get("character_id")) is not int
+                or row["character_id"] <= 0
+                or (
+                    "campaign_id" in row
+                    and (
+                        type(row["campaign_id"]) is not int
+                        or row["campaign_id"] != campaign_id
+                    )
+                )
+            ):
+                raise KankaError(
+                    "Kanka returned a membership for a different owner/campaign"
+                )
+        return {"data": rows, "complete": True, "source": API_BASE_URL + path}
+
     async def get_entity_posts(
         self, campaign_id: int, entity_id: int, *, page: int = 1
     ) -> dict[str, Any]:

@@ -1,16 +1,17 @@
-# Supervised character creation
+# Supervised entity creation
 
 The default MCP server remains GET-only with eight tools. Explicit configuration
-adds a narrow character-creation workflow, independently reviewed through a local
-terminal. The adapter is tested with mocked HTTP and actual stdio/CLI processes.
-A separately authorized public synthetic run also passed through the normal
-executor, local approval command and independent MCP read-back in one campaign.
+adds scoped character, organization and item creation, reviewed through a local
+terminal. All paths are tested with mocked HTTP and actual stdio/CLI processes.
+The character path also passed an earlier authorized live run in one campaign.
+Organization/member/item execution also passed a separately authorized public
+synthetic live run in one campaign; see the acceptance evidence below.
 
 ## Stored proposals and local approval
 
-1. `prepare_character_creation` validates an immutable `CharacterDraft`, checks
-   explicit campaign and operation scope, reads campaign/reference identities,
-   rejects an existing exact name, and stores the proposal. It sends no POST.
+1. The typed preparation tools validate immutable character/organization/item
+   drafts, check explicit campaign/operation scope, read reference identities,
+   reject an existing exact name, and store the proposal. They send no POST.
    References use universal IDs; inventory item module IDs are resolved by GET.
 2. `LocalApprovals` stores the draft and reviewed campaign/reference identities
    in an explicitly selected private SQLite file. Its `review_digest` binds that
@@ -40,7 +41,8 @@ future work. Do not share a GM-scoped server/database with players.
 All three creation environment settings must be supplied together:
 `KANKA_CREATION_DATABASE` (absolute private file), `KANKA_WRITE_CAMPAIGN_IDS`, and
 `KANKA_WRITE_OPERATIONS`. Operation classes are `character.create`,
-`relation.create`, `inventory.add`, `post.create`. Write campaigns must fit the
+`relation.create`, `inventory.add`, `post.create`, `organisation.create`,
+`organisation.member.add`, `item.create`. Write campaigns must fit the
 configured read allowlist. No database opens or extra tools register by default.
 Incomplete or invalid configuration fails startup. See [README](../README.md)
 for complete commands.
@@ -61,8 +63,9 @@ must show that limitation. Private core records do not prove private inventory.
 
 The backend resolves only typed identity fields in fixed endpoint templates;
 lore containing placeholder-like text remains unchanged. Scope covers the entire
-proposal, including attachments. It does not create dependency records or expose
-arbitrary generic mutations, edits, transfers, deletion or image uploads.
+proposal, including attachments/memberships. Dependencies may be created in
+separate approved proposals, using returned IDs in subsequent requests. There is
+no generic batch transaction, arbitrary mutation, edit, transfer, deletion or upload.
 
 The user explicitly asked to ignore the observed mirroring despite
 `two_way: false`. Do not treat it as a blocker or claim a live one-way guarantee.
@@ -70,6 +73,47 @@ Verification does not require that request-only field to be echoed in responses.
 Inventory amounts accept equivalent numeric API representations; all other
 approved fields are compared strictly. Collections are compared as multisets,
 without relying on API ordering, and actual attachment IDs must match recorded IDs.
+
+## Organization membership and item extension
+
+`prepare_organisation_creation` supports name, description, privacy, optional type
+and explicit `OrganisationMemberDraft` entries. A member's `character_entity_id`
+is universal. `role`, `is_private`, `pin_id` and `status_id` are bound into the
+reviewed body. Organization and membership privacy default to true. Duplicate
+character memberships are rejected. Members must resolve to real character
+records in the selected campaign; mentions, generic relations and organization
+namesakes cannot substitute for those identities.
+
+The sequence is an organization core POST, then one POST per membership to
+`organisations/{organisation.id}/organisation_members`, using organization and
+character module IDs. Core/membership creation require separate scope classes.
+GET-only member verification checks ownership, all pages, exact approved fields
+and recorded membership IDs. Missing pagination metadata fails closed even when
+the docs show a simplified single-record response. The authorized live run
+returned a complete two-member list and passed these checks.
+
+`prepare_item_creation` supports name, HTML description, privacy and optional
+text `type`, `price`, `size`, `weight`. It uses `POST items`, requires `item.create`,
+and verifies the generic/module identities plus every supplied field. It does
+not implicitly add inventory. Additional item fields and references are outside
+this slice and fail validation.
+
+`execute_creation` accepts only campaign/proposal IDs and executes any supported
+stored draft. The original `execute_character_creation` alias rejects other
+draft types before consuming approval. Default startup is unchanged; opt-in
+startup now registers fourteen tools. Existing persisted character payloads keep
+their original format, while organization/item proposals explicitly bind their
+type in the review payload. No database schema migration is required.
+
+The extended offline stdio workflow creates mentor → item → Éldan with original
+attachments → organization with both characters as members. Each proposal has a
+separate terminal approval and scope check. Ten mocked POSTs create four core
+records and six attachment/membership records. All HTTP transports are forced
+mocks. A separate authorized live run also exercised these paths. See the
+[scenario specification](synthetic-creation-validation.md) and Kanka's
+[organizations](https://app.kanka.io/api-docs/1.0/organisations),
+[memberships](https://app.kanka.io/api-docs/1.0/organisation-members), and
+[items](https://app.kanka.io/api-docs/1.0/items) documentation.
 
 ## Execution, progress and recovery
 
@@ -111,8 +155,8 @@ stored proposal label still says approved.
 For uncertain outcomes, the local `reconcile` command:
 
 1. Requires matching write configuration and a token for scoped GET-only reads.
-2. Inspects an explicitly selected candidate: universal entity ID for a character,
-   attachment record ID for relation/inventory/post. Missing, inaccessible,
+2. Inspects an explicitly selected candidate: universal entity ID for a core
+   character/organization/item; record ID for relation/inventory/post/membership. Missing, inaccessible,
    incomplete, ambiguous or mismatching evidence fails closed.
 3. Displays the matching record and request fingerprint. The local reviewer must
    stop creation workers and verify the record's origin, then type the exact
@@ -173,3 +217,28 @@ in the private local report.
 A new live execution test needs explicit campaign/operation consent and review of
 the exact proposed fields/privacy. Cleanup is separately scoped. Image upload,
 automatic modes, canon overwrites and broader entity workflows remain later work.
+
+### Authorized organization/item live acceptance
+
+After reviewing draft PR #4, the user explicitly authorized a public synthetic
+live test and, when the previous test characters returned 404, authorized their
+recreation. The normal opt-in stdio server prepared and executed four separately
+approved proposals: mentor, item, character with four attachments, and organization
+with two actual memberships. All ten journaled POST steps were confirmed and all
+four proposals reached verified completion. No direct setup writes were needed.
+
+The item matched its description, privacy, type, price, size and weight. Character
+verification covered the original biography, age/sex, resolved species/location,
+mentor relation, equipped linked inventory and two public posts. The organization
+and two public active memberships matched the returned character module IDs and
+the distinct apprentice/mentor roles. Membership pagination was complete.
+Independent reads checked core fields and memberships; status, consumed-approval
+replay rejection, journal reopening, token absence from storage and normal stdio
+shutdown passed. Inventory used the upstream default visibility as documented.
+
+The local host performed separate terminal approvals under the user's explicit
+test authorization; this does not establish independent human authentication.
+Evidence and campaign data remain in a private local report outside Git. Records
+were left for user inspection; no cleanup, edits or deletion were requested.
+This run covers one account/campaign and the supplied fields, not every privacy
+mode or permission combination. Future live writes need new explicit scope.

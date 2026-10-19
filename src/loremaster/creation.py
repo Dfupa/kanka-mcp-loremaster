@@ -19,7 +19,13 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_vali
 ID = Annotated[int, Field(strict=True, gt=0)]
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 OperationClass = Literal[
-    "character.create", "relation.create", "inventory.add", "post.create"
+    "character.create",
+    "relation.create",
+    "inventory.add",
+    "post.create",
+    "organisation.create",
+    "organisation.member.add",
+    "item.create",
 ]
 MAX_PENDING_PROPOSALS = 100
 
@@ -80,22 +86,104 @@ class CharacterDraft(DraftRecord):
         return values
 
 
+class OrganisationMemberDraft(DraftRecord):
+    """Use a character's universal ID; the executor resolves its module ID."""
+
+    character_entity_id: ID
+    role: Text = "Member"
+    is_private: bool = True
+    pin_id: Annotated[int, Field(ge=0, le=3)] = 0
+    status_id: Annotated[int, Field(ge=0, le=2)] = 0
+
+
+class OrganisationDraft(DraftRecord):
+    """Create one organisation and explicit memberships, never edit existing ones."""
+
+    campaign_id: ID
+    name: Text
+    entry: Text
+    is_private: bool = True
+    type: Text | None = None
+    members: tuple[OrganisationMemberDraft, ...] = ()
+
+    @field_validator("members")
+    @classmethod
+    def unique_members(
+        cls, values: tuple[OrganisationMemberDraft, ...]
+    ) -> tuple[OrganisationMemberDraft, ...]:
+        """One reviewed membership per character; do not silently duplicate."""
+        if len(values) != len({member.character_entity_id for member in values}):
+            raise ValueError("Organisation members must identify distinct characters")
+        return values
+
+
+class ItemDraft(DraftRecord):
+    """Create a typed item record, separately from adding it to an inventory."""
+
+    campaign_id: ID
+    name: Text
+    entry: Text
+    is_private: bool = True
+    type: Text | None = None
+    price: Text | None = None
+    size: Text | None = None
+    weight: Text | None = None
+
+
+type CreationDraft = CharacterDraft | OrganisationDraft | ItemDraft
+DRAFT_MODELS = {
+    "character": CharacterDraft,
+    "organisation": OrganisationDraft,
+    "item": ItemDraft,
+}
+
+
+def creation_kind(draft: CreationDraft) -> str:
+    """Return only explicitly implemented core types, never arbitrary endpoints."""
+    for kind, model in DRAFT_MODELS.items():
+        if type(draft) is model:
+            return kind
+    raise ValueError("Unsupported creation draft")
+
+
+def validate_creation_draft(draft: CreationDraft) -> CreationDraft:
+    """Revalidate immutable copies, including values introduced by model_copy."""
+    return DRAFT_MODELS[creation_kind(draft)].model_validate(draft.model_dump())
+
+
+def referenced_entities(draft: CreationDraft) -> list[tuple[int, str | None]]:
+    """List universal references and required module types (None allows any type)."""
+    if isinstance(draft, OrganisationDraft):
+        return [(member.character_entity_id, "character") for member in draft.members]
+    if isinstance(draft, ItemDraft):
+        return []
+    return (
+        [(relation.target_id, None) for relation in draft.relations]
+        + [(item.item_entity_id, "item") for item in draft.inventory]
+        + [(uid, "race") for uid in draft.race_entity_ids]
+        + [(uid, "location") for uid in draft.location_entity_ids]
+    )
+
+
 class CreationScope(DraftRecord):
     """Deny by default; permit only explicit campaigns and operation classes."""
 
     campaign_ids: frozenset[ID] = frozenset()
     operations: frozenset[OperationClass] = frozenset()
 
-    def check(self, draft: CharacterDraft) -> None:
-        """Check the entire proposal before accepting any of its operations."""
-        required = {"character.create"}
-        for entries, operation in (
-            (draft.relations, "relation.create"),
-            (draft.inventory, "inventory.add"),
-            (draft.posts, "post.create"),
-        ):
-            if entries:
-                required.add(operation)
+    def check(self, draft: CreationDraft) -> None:
+        """Check the whole proposal, including membership/attachment operations."""
+        required = {creation_kind(draft) + ".create"}
+        if isinstance(draft, CharacterDraft):
+            for entries, operation in (
+                (draft.relations, "relation.create"),
+                (draft.inventory, "inventory.add"),
+                (draft.posts, "post.create"),
+            ):
+                if entries:
+                    required.add(operation)
+        elif isinstance(draft, OrganisationDraft) and draft.members:
+            required.add("organisation.member.add")
         if draft.campaign_id not in self.campaign_ids:
             raise PermissionError("Campaign is outside the creation scope")
         if not required <= self.operations:
@@ -104,69 +192,102 @@ class CreationScope(DraftRecord):
             )
 
 
-def preview_creation(draft: CharacterDraft) -> dict[str, Any]:
-    """Return ordered requests and a content checksum, which is not authorization."""
-    draft = CharacterDraft.model_validate(draft.model_dump())
+def preview_creation(draft: CreationDraft) -> dict[str, Any]:
+    """Return fixed ordered requests and a checksum, never execution authority."""
+    draft = validate_creation_draft(draft)
+    kind = creation_kind(draft)
     base = f"campaigns/{draft.campaign_id}"
     entity = base + "/entities/{entity_id}"
     core = draft.model_dump(
-        include={"name", "entry", "is_private", "age", "sex"}, exclude_none=True
+        include={
+            "name",
+            "entry",
+            "is_private",
+            "age",
+            "sex",
+            "type",
+            "price",
+            "size",
+            "weight",
+        },
+        exclude_none=True,
     )
-    for field_name, references, kind in (
-        ("races", draft.race_entity_ids, "race"),
-        ("locations", draft.location_entity_ids, "location"),
-    ):
-        if references:
-            core[field_name] = [f"{{{kind}_child_id:{uid}}}" for uid in references]
+    if isinstance(draft, CharacterDraft):
+        for field_name, references, module in (
+            ("races", draft.race_entity_ids, "race"),
+            ("locations", draft.location_entity_ids, "location"),
+        ):
+            if references:
+                core[field_name] = [
+                    f"{{{module}_child_id:{uid}}}" for uid in references
+                ]
     operations = [
         {
-            "key": "character",
-            "operation": "character.create",
+            "key": kind,
+            "operation": kind + ".create",
             "method": "POST",
-            "path": base + "/characters",
+            "path": base + f"/{kind}s",
             "body": core,
         }
     ]
-    for index, relation in enumerate(draft.relations):
-        operations.append(
-            {
-                "key": f"relation:{index}",
-                "operation": "relation.create",
-                "method": "POST",
-                "path": entity + "/relations",
-                "body": {
-                    **relation.model_dump(),
-                    "owner_id": "{entity_id}",
-                    "two_way": False,
-                },
-            }
-        )
-    for index, item in enumerate(draft.inventory):
-        operations.append(
-            {
-                "key": f"inventory:{index}",
-                "operation": "inventory.add",
-                "method": "POST",
-                "path": entity + "/inventory",
-                "body": {
-                    "entity_id": "{entity_id}",
-                    "item_id": f"{{item_child_id:{item.item_entity_id}}}",
-                    "amount": str(item.amount),
-                    "is_equipped": item.is_equipped,
-                    "position": item.position,
-                },
-            }
-        )
-    for index, post in enumerate(draft.posts):
-        operations.append(
-            {
-                "key": f"post:{index}",
-                "operation": "post.create",
-                "method": "POST",
-                "path": entity + "/posts",
-                "body": {**post.model_dump(), "entity_id": "{entity_id}"},
-            }
-        )
+    if isinstance(draft, OrganisationDraft):
+        for index, member in enumerate(draft.members):
+            reference = member.character_entity_id
+            operations.append(
+                {
+                    "key": f"member:{index}",
+                    "operation": "organisation.member.add",
+                    "method": "POST",
+                    "path": base
+                    + "/organisations/{organisation_id}/organisation_members",
+                    "body": {
+                        **member.model_dump(exclude={"character_entity_id"}),
+                        "organisation_id": "{organisation_id}",
+                        "character_id": f"{{character_child_id:{reference}}}",
+                    },
+                }
+            )
+    elif isinstance(draft, CharacterDraft):
+        for index, relation in enumerate(draft.relations):
+            operations.append(
+                {
+                    "key": f"relation:{index}",
+                    "operation": "relation.create",
+                    "method": "POST",
+                    "path": entity + "/relations",
+                    "body": {
+                        **relation.model_dump(),
+                        "owner_id": "{entity_id}",
+                        "two_way": False,
+                    },
+                }
+            )
+        for index, item in enumerate(draft.inventory):
+            operations.append(
+                {
+                    "key": f"inventory:{index}",
+                    "operation": "inventory.add",
+                    "method": "POST",
+                    "path": entity + "/inventory",
+                    "body": {
+                        "entity_id": "{entity_id}",
+                        "item_id": f"{{item_child_id:{item.item_entity_id}}}",
+                        "amount": str(item.amount),
+                        "is_equipped": item.is_equipped,
+                        "position": item.position,
+                    },
+                }
+            )
+        for index, post in enumerate(draft.posts):
+            operations.append(
+                {
+                    "key": f"post:{index}",
+                    "operation": "post.create",
+                    "method": "POST",
+                    "path": entity + "/posts",
+                    "body": {**post.model_dump(), "entity_id": "{entity_id}"},
+                }
+            )
     proposal = {
         "mode": "proposal_only",
         "campaign_id": draft.campaign_id,
@@ -179,19 +300,30 @@ def preview_creation(draft: CharacterDraft) -> dict[str, Any]:
 
 
 def resolve_creation_request(
-    draft: CharacterDraft,
+    draft: CreationDraft,
     key: str,
     *,
     entity_id: int | None = None,
+    child_id: int | None = None,
     module_ids: dict[int, int] | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """Bind only typed IDs in one reviewed operation; never replace lore text."""
+    """Bind only typed IDs in fixed templates, preserving literal lore text."""
     operation = next(
         (op for op in preview_creation(draft)["operations"] if op["key"] == key), None
     )
     if operation is None:
         raise ValueError("Unknown creation step")
     path, body = operation["path"], dict(operation["body"])
+    if key.startswith("member:"):
+        if type(child_id) is not int or child_id <= 0:
+            raise ValueError("Membership requires a resolved organisation module ID")
+        reference = draft.members[int(key.split(":")[1])].character_entity_id
+        character_id = (module_ids or {}).get(reference)
+        if type(character_id) is not int or character_id <= 0:
+            raise ValueError("Membership requires a resolved character module ID")
+        path = path.replace("{organisation_id}", str(child_id))
+        body.update(organisation_id=child_id, character_id=character_id)
+        return path, body
     if key == "character":
         for field_name, references in (
             ("races", draft.race_entity_ids),
@@ -204,17 +336,17 @@ def resolve_creation_request(
                         f"Character {field_name} require resolved module IDs"
                     )
                 body[field_name] = values
-    if key != "character":
+    if key != creation_kind(draft):
         if type(entity_id) is not int or entity_id <= 0:
             raise ValueError("Attachment requires a positive universal owner ID")
         path = path.replace("{entity_id}", str(entity_id))
         body["owner_id" if key.startswith("relation:") else "entity_id"] = entity_id
     if key.startswith("inventory:"):
         reference = draft.inventory[int(key.split(":")[1])].item_entity_id
-        child_id = (module_ids or {}).get(reference)
-        if type(child_id) is not int or child_id <= 0:
+        item_id = (module_ids or {}).get(reference)
+        if type(item_id) is not int or item_id <= 0:
             raise ValueError("Inventory requires a resolved positive module item ID")
-        body["item_id"] = child_id
+        body["item_id"] = item_id
     return path, body
 
 
@@ -233,12 +365,12 @@ class ApprovedCreation:
     proposal_id: str
     content_digest: str
     approved_by: str
-    draft: CharacterDraft = field(repr=False)
+    draft: CreationDraft = field(repr=False)
 
 
 @dataclass
 class _Pending:
-    draft: CharacterDraft
+    draft: CreationDraft
     digest: str
     deadline: float
     approved_by: str | None = None
@@ -268,9 +400,9 @@ class ApprovalGate:
         self._pending: dict[str, _Pending] = {}
         self._lock = threading.Lock()
 
-    def prepare(self, draft: CharacterDraft) -> dict[str, Any]:
+    def prepare(self, draft: CreationDraft) -> dict[str, Any]:
         """Store an immutable validated proposal; return a review copy with no grant."""
-        draft = CharacterDraft.model_validate(draft.model_dump())
+        draft = validate_creation_draft(draft)
         preview = preview_creation(draft)
         with self._lock:
             self._scope.check(draft)

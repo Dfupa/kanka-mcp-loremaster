@@ -3,7 +3,13 @@
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from loremaster.creation import CharacterDraft, resolve_creation_request
+from loremaster.creation import (
+    CreationDraft,
+    ItemDraft,
+    OrganisationDraft,
+    creation_kind,
+    resolve_creation_request,
+)
 from loremaster.kanka import KankaError
 
 
@@ -39,7 +45,10 @@ def verify_result_ids(journal: dict[str, Any], bundle: dict[str, Any]) -> None:
         ("relations", "relation:"),
         ("inventory", "inventory:"),
         ("posts", "post:"),
+        ("members", "member:"),
     ):
+        if section not in bundle["sections"]:
+            continue
         expected = {row["id"] for key, row in journal.items() if key.startswith(prefix)}
         rows = bundle["sections"][section]["data"]
         if any(type(row.get("id")) is not int or row["id"] <= 0 for row in rows):
@@ -50,7 +59,7 @@ def verify_result_ids(journal: dict[str, Any], bundle: dict[str, Any]) -> None:
 
 
 def verify_created(
-    draft: CharacterDraft, bundle: dict[str, Any], module_ids: dict[int, int]
+    draft: CreationDraft, bundle: dict[str, Any], module_ids: dict[int, int]
 ) -> None:
     """Verify requested fields; accept numeric quantities and actual relation schemas.
 
@@ -62,25 +71,42 @@ def verify_created(
     ):
         raise KankaError("Created entity could not be read back completely")
     details = bundle["details"]
-    _path, core = resolve_creation_request(draft, "character", module_ids=module_ids)
+    _path, core = resolve_creation_request(
+        draft, creation_kind(draft), module_ids=module_ids
+    )
     if not matches_creation_fields(core, details):
         raise KankaError("Created entity differs from the approved draft")
-    expected = {
-        "posts": [post.model_dump() for post in draft.posts],
-        "relations": [
-            {**relation.model_dump(), "owner_id": details["entity_id"]}
-            for relation in draft.relations
-        ],
-        "inventory": [
-            {
-                "item_id": module_ids[item.item_entity_id],
-                "amount": str(item.amount),
-                "is_equipped": item.is_equipped,
-                "position": item.position,
-            }
-            for item in draft.inventory
-        ],
-    }
+    if isinstance(draft, OrganisationDraft):
+        expected = {
+            "members": [
+                resolve_creation_request(
+                    draft,
+                    f"member:{index}",
+                    child_id=details["id"],
+                    module_ids=module_ids,
+                )[1]
+                for index in range(len(draft.members))
+            ]
+        }
+    elif isinstance(draft, ItemDraft):
+        expected = {}
+    else:
+        expected = {
+            "posts": [post.model_dump() for post in draft.posts],
+            "relations": [
+                {**relation.model_dump(), "owner_id": details["entity_id"]}
+                for relation in draft.relations
+            ],
+            "inventory": [
+                {
+                    "item_id": module_ids[item.item_entity_id],
+                    "amount": str(item.amount),
+                    "is_equipped": item.is_equipped,
+                    "position": item.position,
+                }
+                for item in draft.inventory
+            ],
+        }
     for section, rows in expected.items():
         actual = bundle["sections"][section]["data"]
         if len(actual) != len(rows):

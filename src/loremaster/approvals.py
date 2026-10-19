@@ -13,10 +13,14 @@ from pathlib import Path
 from typing import Any
 
 from loremaster.creation import (
+    DRAFT_MODELS,
     MAX_PENDING_PROPOSALS,
     ApprovedCreation,
     CharacterDraft,
+    CreationDraft,
+    creation_kind,
     preview_creation,
+    validate_creation_draft,
 )
 from loremaster.progress import CreationJournal
 
@@ -54,10 +58,13 @@ class LocalApprovals:
         ).hexdigest()
 
     def prepare(
-        self, draft: CharacterDraft, references: dict[str, Any]
+        self, draft: CreationDraft, references: dict[str, Any]
     ) -> dict[str, Any]:
         """Save an unapproved, immutable draft and its reviewed reference identities."""
+        draft = validate_creation_draft(draft)
         payload = {"draft": draft.model_dump(mode="json"), "references": references}
+        if not isinstance(draft, CharacterDraft):
+            payload["entity_type"] = creation_kind(draft)
         if len(json.dumps(payload, ensure_ascii=False).encode()) > 128 * 1024:
             raise ValueError("Creation proposal exceeds the 128 KiB review budget")
         proposal_id = uuid.uuid4().hex
@@ -78,7 +85,7 @@ class LocalApprovals:
             )
         return self.review(proposal_id)
 
-    def _load(self, proposal_id: str) -> tuple[Any, CharacterDraft, dict[str, Any]]:
+    def _load(self, proposal_id: str) -> tuple[Any, CreationDraft, dict[str, Any]]:
         if (
             not isinstance(proposal_id, str)
             or not proposal_id
@@ -92,7 +99,8 @@ class LocalApprovals:
             raise PermissionError("Proposal is unavailable")
         try:
             payload = json.loads(row["payload"])
-            draft = CharacterDraft.model_validate_json(json.dumps(payload["draft"]))
+            model = DRAFT_MODELS[payload.get("entity_type", "character")]
+            draft = model.model_validate_json(json.dumps(payload["draft"]))
             if self._digest(payload) != row["digest"] or not isinstance(
                 payload["references"], dict
             ):
@@ -108,6 +116,7 @@ class LocalApprovals:
         row, draft, references = self._load(proposal_id)
         return {
             "proposal_id": proposal_id,
+            "entity_type": creation_kind(draft),
             "status": row["state"],
             "review_digest": row["digest"],
             "preview": preview_creation(draft),
@@ -117,11 +126,11 @@ class LocalApprovals:
             "progress": self.journal.progress(proposal_id),
             "steps": self.journal.states(proposal_id),
             "inventory_visibility": "Kanka default; per-entry privacy is not configured"
-            if draft.inventory
+            if isinstance(draft, CharacterDraft) and draft.inventory
             else None,
         }
 
-    def draft(self, proposal_id: str) -> CharacterDraft:
+    def draft(self, proposal_id: str) -> CreationDraft:
         """Return the integrity-checked immutable draft for backend scope checks."""
         return self._load(proposal_id)[1]
 

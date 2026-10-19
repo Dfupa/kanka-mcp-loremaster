@@ -1,4 +1,4 @@
-"""Opt-in supervised character creation with durable intent and read-back."""
+"""Opt-in supervised entity creation with durable intent and read-back."""
 
 import asyncio
 import sqlite3
@@ -10,10 +10,15 @@ from loremaster.aggregate import get_entity_full
 from loremaster.approvals import LocalApprovals
 from loremaster.creation import (
     ApprovedCreation,
-    CharacterDraft,
+    CreationDraft,
     CreationScope,
+    ItemDraft,
+    OrganisationDraft,
+    creation_kind,
     preview_creation,
+    referenced_entities,
     resolve_creation_request,
+    validate_creation_draft,
 )
 from loremaster.kanka import API_BASE_URL, KankaClient, KankaError
 from loremaster.verification import (
@@ -69,7 +74,7 @@ class CreationService:
         await self._writer.aclose()
         self.store.close()
 
-    async def _references(self, draft: CharacterDraft) -> dict[str, Any]:
+    async def _references(self, draft: CreationDraft) -> dict[str, Any]:
         self.scope.check(draft)
         campaign = (await self.reader._get(f"campaigns/{draft.campaign_id}"))["data"]
         if (
@@ -84,36 +89,26 @@ class CreationService:
             "entities": {},
             "item_ids": {},
         }
-        for uid in dict.fromkeys(
-            [r.target_id for r in draft.relations]
-            + [i.item_entity_id for i in draft.inventory]
-            + list(draft.race_entity_ids)
-            + list(draft.location_entity_ids)
-        ):
+        references = referenced_entities(draft)
+        for uid in dict.fromkeys(uid for uid, _expected in references):
             record = await self.reader.get_entity_metadata(draft.campaign_id, uid)
             result["entities"][str(uid)] = {
                 key: record.get(key)
                 for key in ("id", "campaign_id", "child_id", "entity_type", "name")
             }
-        for item in draft.inventory:
-            linked = await self.reader.get_entity(
-                draft.campaign_id, item.item_entity_id
-            )
-            if linked["entity"]["entity_type"] != "item":
-                raise ValueError("Inventory references must identify item entities")
-            result["item_ids"][str(item.item_entity_id)] = linked["details"]["id"]
-        for expected, references in (
-            ("race", draft.race_entity_ids),
-            ("location", draft.location_entity_ids),
-        ):
-            for uid in references:
-                linked = await self.reader.get_entity(draft.campaign_id, uid)
-                if linked["entity"]["entity_type"] != expected:
-                    raise ValueError(f"Character reference must identify a {expected}")
+        for uid, expected in dict.fromkeys(references):
+            if expected is None:
+                continue
+            linked = await self.reader.get_entity(draft.campaign_id, uid)
+            if linked["entity"]["entity_type"] != expected:
+                raise ValueError(f"Creation reference must identify a {expected}")
+            if expected == "item":
+                result["item_ids"][str(uid)] = linked["details"]["id"]
         return result
 
-    async def prepare(self, draft: CharacterDraft) -> dict[str, Any]:
+    async def prepare(self, draft: CreationDraft) -> dict[str, Any]:
         """Resolve references and save a proposal; issue no approval or POST."""
+        draft = validate_creation_draft(draft)
         self.scope.check(draft)
         async with self.reader.account_reads():
             refs = await self._references(draft)
@@ -122,7 +117,7 @@ class CreationService:
             )
             if matches["exact"]:
                 raise ValueError(
-                    "Character name already exists; resolve the conflict first"
+                    "Entity name already exists; resolve the conflict first"
                 )
         return self.store.prepare(draft, refs)
 
@@ -137,6 +132,7 @@ class CreationService:
             key: review[key]
             for key in (
                 "proposal_id",
+                "entity_type",
                 "status",
                 "progress",
                 "steps",
@@ -149,6 +145,7 @@ class CreationService:
         """Claim local approval once and execute only its stored, scoped draft."""
         async with self._lock:
             self.status(campaign_id, proposal_id)
+            kind = creation_kind(self.store.draft(proposal_id))
             try:
                 self._active_step = "preflight"
                 approved = self.store.claim(proposal_id)
@@ -181,8 +178,9 @@ class CreationService:
                 )
                 return {
                     "proposal_id": proposal_id,
+                    "entity_type": kind,
                     "status": status,
-                    "entity_id": progress.get("character", {}).get("entity_id"),
+                    "entity_id": progress.get(kind, {}).get("entity_id"),
                     "completed": [key for key in progress if key != "uncertain"],
                     "failed_step": progress.get("uncertain")
                     or next(
@@ -214,6 +212,7 @@ class CreationService:
         self, proposal_id: str, approved: ApprovedCreation
     ) -> dict[str, Any]:
         draft = approved.draft
+        kind = creation_kind(draft)
         journal = self.store.journal
         progress = journal.progress(proposal_id)
         if "uncertain" in progress:
@@ -224,21 +223,19 @@ class CreationService:
         refs = await self._references(draft)
         if refs != self.store.review(proposal_id)["references"]:
             raise ValueError("Referenced identities changed after review")
-        module_ids = {int(key): value for key, value in refs["item_ids"].items()}
-        module_ids.update(
-            {
-                uid: refs["entities"][str(uid)]["child_id"]
-                for uid in draft.race_entity_ids + draft.location_entity_ids
-            }
-        )
+        module_ids = {
+            uid: refs["entities"][str(uid)]["child_id"]
+            for uid, expected in referenced_entities(draft)
+            if expected is not None
+        }
         journal.bind(proposal_id, approved, module_ids)
-        uid = progress.get("character", {}).get("entity_id")
+        uid = progress.get(kind, {}).get("entity_id")
         if uid is None:
             matches = await self.reader.find_entities_by_name(
                 draft.campaign_id, draft.name
             )
             if matches["exact"]:
-                raise ValueError("Character name already exists; no creation was sent")
+                raise ValueError("Entity name already exists; no creation was sent")
         else:
             await self._verify(draft, progress, module_ids)
         for operation in preview_creation(draft)["operations"]:
@@ -247,7 +244,11 @@ class CreationService:
                 continue
             self._active_step = key
             path, body = resolve_creation_request(
-                draft, key, entity_id=uid, module_ids=module_ids
+                draft,
+                key,
+                entity_id=uid,
+                child_id=progress.get(kind, {}).get("id"),
+                module_ids=module_ids,
             )
             budget = self.reader._budget.get()
             if budget is None:
@@ -279,14 +280,32 @@ class CreationService:
                     and len(data) == 1
                 ):
                     data = data[0]
-                owner = "owner_id" if key.startswith("relation:") else "entity_id"
+                owner = (
+                    "organisation_id"
+                    if key.startswith("member:")
+                    else "owner_id"
+                    if key.startswith("relation:")
+                    else "entity_id"
+                )
+                expected_owner = (
+                    progress.get(kind, {}).get("id")
+                    if key.startswith("member:")
+                    else uid
+                )
                 if (
                     not isinstance(data, dict)
                     or type(data.get("id")) is not int
                     or data["id"] <= 0
                     or type(data.get(owner)) is not int
                     or data[owner] <= 0
-                    or (key != "character" and data[owner] != uid)
+                    or (key != kind and data[owner] != expected_owner)
+                    or (
+                        key.startswith("member:")
+                        and (
+                            type(data.get("character_id")) is not int
+                            or data["character_id"] != body["character_id"]
+                        )
+                    )
                 ):
                     raise ValueError("Unverifiable creation identity")
             except asyncio.CancelledError:
@@ -300,14 +319,15 @@ class CreationService:
                 ) from None
             journal.finish(proposal_id, key, "confirmed", data)
             progress[key] = data
-            uid = progress["character"]["entity_id"]
+            uid = progress[kind]["entity_id"]
         bundle = await self._verify(draft, progress, module_ids)
         self.store.complete(proposal_id, approved)
         return {
             "proposal_id": proposal_id,
+            "entity_type": kind,
             "status": "verified",
             "entity_id": uid,
-            "child_id": progress["character"]["id"],
+            "child_id": progress[kind]["id"],
             "completed": list(progress),
             "sources": bundle["sources"],
             "reviewed_by": approved.approved_by,
@@ -315,37 +335,75 @@ class CreationService:
 
     async def _verify(
         self,
-        draft: CharacterDraft,
+        draft: CreationDraft,
         progress: dict[str, Any],
         module_ids: dict[int, int],
     ) -> dict[str, Any]:
         self._active_step = "verification"
-        uid = progress["character"]["entity_id"]
-        bundle = await get_entity_full(
-            self.reader,
-            draft.campaign_id,
-            uid,
-            sections=["posts", "inventory", "relations"],
-        )
-        if (
-            bundle["entity"]["entity_type"] != "character"
-            or bundle["entity"]["child_id"] != progress["character"]["id"]
-        ):
-            raise KankaError("Previously created character identity changed")
-        partial = draft.model_copy(
-            update={
-                section: tuple(
-                    value
-                    for index, value in enumerate(getattr(draft, section))
-                    if f"{prefix}:{index}" in progress
-                )
-                for section, prefix in (
-                    ("posts", "post"),
-                    ("inventory", "inventory"),
-                    ("relations", "relation"),
-                )
+        kind = creation_kind(draft)
+        uid = progress[kind]["entity_id"]
+        if isinstance(draft, OrganisationDraft):
+            core = await self.reader.get_entity(draft.campaign_id, uid)
+            members = await self.reader.get_organisation_members(draft.campaign_id, uid)
+            base = f"{API_BASE_URL}campaigns/{draft.campaign_id}"
+            bundle = {
+                **core,
+                "sections": {"members": members},
+                "missing_data": [],
+                "sources": {
+                    "entity": f"{base}/entities/{uid}",
+                    "details": f"{base}/organisations/{progress[kind]['id']}",
+                    "members": members["source"],
+                },
             }
-        )
+            partial = draft.model_copy(
+                update={
+                    "members": tuple(
+                        member
+                        for index, member in enumerate(draft.members)
+                        if f"member:{index}" in progress
+                    )
+                }
+            )
+        elif isinstance(draft, ItemDraft):
+            core = await self.reader.get_entity(draft.campaign_id, uid)
+            base = f"{API_BASE_URL}campaigns/{draft.campaign_id}"
+            bundle = {
+                **core,
+                "sections": {},
+                "missing_data": [],
+                "sources": {
+                    "entity": f"{base}/entities/{uid}",
+                    "details": f"{base}/items/{progress[kind]['id']}",
+                },
+            }
+            partial = draft
+        else:
+            bundle = await get_entity_full(
+                self.reader,
+                draft.campaign_id,
+                uid,
+                sections=["posts", "inventory", "relations"],
+            )
+            partial = draft.model_copy(
+                update={
+                    section: tuple(
+                        value
+                        for index, value in enumerate(getattr(draft, section))
+                        if f"{prefix}:{index}" in progress
+                    )
+                    for section, prefix in (
+                        ("posts", "post"),
+                        ("inventory", "inventory"),
+                        ("relations", "relation"),
+                    )
+                }
+            )
+        if (
+            bundle["entity"]["entity_type"] != kind
+            or bundle["entity"]["child_id"] != progress[kind]["id"]
+        ):
+            raise KankaError("Previously created entity identity changed")
         verify_created(partial, bundle, module_ids)
         verify_result_ids(progress, bundle)
         return bundle
@@ -360,16 +418,30 @@ class CreationService:
         if pending["campaign_id"] != campaign_id:
             raise PermissionError("Pending operation belongs to a different campaign")
         body, key = pending["body"], pending["key"]
+        kind = creation_kind(self.store.draft(proposal_id))
         async with self.reader.account_reads():
-            if key == "character":
-                if pending["path"] != f"campaigns/{campaign_id}/characters":
-                    raise ValueError("Invalid pending character path")
+            if key == kind:
+                if pending["path"] != f"campaigns/{campaign_id}/{kind}s":
+                    raise ValueError("Invalid pending entity path")
                 core = await self.reader.get_entity(campaign_id, candidate_id)
                 candidates = (
-                    [core["details"]]
-                    if core["entity"]["entity_type"] == "character"
-                    else []
+                    [core["details"]] if core["entity"]["entity_type"] == kind else []
                 )
+            elif key.startswith("member:"):
+                uid = self.store.journal.progress(proposal_id)[kind]["entity_id"]
+                owner = body.get("organisation_id")
+                self.reader._check_id(owner, "organisation_id")
+                if pending["path"] != (
+                    f"campaigns/{campaign_id}/organisations/{owner}"
+                    "/organisation_members"
+                ):
+                    raise ValueError("Invalid pending membership path")
+                collection = await self.reader.get_organisation_members(
+                    campaign_id, uid
+                )
+                candidates = [
+                    row for row in collection["data"] if row["id"] == candidate_id
+                ]
             else:
                 section = {
                     "relation": "relations",

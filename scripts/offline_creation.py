@@ -153,6 +153,7 @@ class OfflineCreation:
                 "items",
                 "races",
                 "locations",
+                "organisations",
             ):
                 for key, record in self.records.items():
                     if (
