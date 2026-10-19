@@ -13,13 +13,183 @@ from loremaster import approvals, approve
 from loremaster.approvals import LocalApprovals
 from loremaster.creation import CreationScope
 from loremaster.execution import CreationService
-from loremaster.kanka import KankaClient
+from loremaster.kanka import KankaClient, KankaError
 from loremaster.server import create_server, creation_settings
 from loremaster.server import main as start_server
 
 ALL_OPERATIONS = frozenset(
     {"character.create", "relation.create", "inventory.add", "post.create"}
 )
+
+
+@pytest.fixture
+def expanded(service):
+    creator, api = service
+    api.records.update(
+        {
+            301: {
+                "id": 31,
+                "entity_id": 301,
+                "name": "Synthetic species",
+                "entry": "Species",
+                "entity_type": "race",
+            },
+            401: {
+                "id": 41,
+                "entity_id": 401,
+                "name": "Synthetic home",
+                "entry": "Home",
+                "entity_type": "location",
+            },
+        }
+    )
+    return offline.example_draft().model_copy(
+        update={
+            "age": "28",
+            "sex": "Male",
+            "race_entity_ids": (301,),
+            "location_entity_ids": (401,),
+        }
+    )
+
+
+async def test_expanded_character_fields_execute_and_verify(service, expanded):
+    creator, api = service
+    proposal = await creator.prepare(expanded)
+    assert proposal["references"]["entities"]["301"]["entity_type"] == "race"
+    assert proposal["references"]["entities"]["401"]["entity_type"] == "location"
+    authorize(creator, proposal)
+    created = await creator.execute(7, proposal["proposal_id"])
+    assert created["status"] == "verified"
+    record = api.records[created["entity_id"]]
+    assert {key: record[key] for key in ("age", "sex", "races", "locations")} == {
+        "age": "28",
+        "sex": "Male",
+        "races": [31],
+        "locations": [41],
+    }
+    assert sum(method == "POST" for method, _path in api.requests) == 5
+
+
+async def test_preflight_rate_limit_requires_fresh_approval_without_resending(service):
+    creator, api = service
+    proposal = await creator.prepare(offline.example_draft())
+    authorize(creator, proposal)
+    limited = True
+
+    def handler(request):
+        if limited and request.url.path == "/1.0/campaigns/7":
+            return httpx.Response(429, headers={"Retry-After": "60"})
+        return handle(api, request)
+
+    await creator.reader._http.aclose()
+    creator.reader._http = httpx.AsyncClient(
+        base_url="https://api.kanka.io/1.0/", transport=httpx.MockTransport(handler)
+    )
+    stopped = await creator.execute(7, proposal["proposal_id"])
+    assert stopped["status"] == "failed"
+    assert stopped["error"]["status_code"] == 429
+    assert stopped["failed_step"] == "preflight"
+    assert creator.store.journal.states(proposal["proposal_id"]) == {}
+    assert all(method == "GET" for method, _path in api.requests)
+    denied = await create_server(creator.reader, creator).call_tool(
+        "execute_character_creation",
+        {"campaign_id": 7, "proposal_id": proposal["proposal_id"]},
+    )
+    assert denied.isError
+    limited = False
+    authorize(creator, proposal)
+    assert (await creator.execute(7, proposal["proposal_id"]))["status"] == "verified"
+    assert sum(method == "POST" for method, _path in api.requests) == 5
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("race_entity_ids", (101,)),
+        ("location_entity_ids", (201,)),
+        ("race_entity_ids", (31,)),
+        ("location_entity_ids", (999,)),
+    ],
+)
+async def test_invalid_profile_references_fail_before_creation(
+    service, expanded, field, value
+):
+    creator, api = service
+    with pytest.raises((ValueError, KankaError)):
+        await creator.prepare(expanded.model_copy(update={field: value}))
+    assert all(method == "GET" for method, _path in api.requests)
+
+
+@pytest.mark.parametrize("uid", [301, 401])
+async def test_profile_reference_change_after_review_blocks_creation(
+    service, expanded, uid
+):
+    creator, api = service
+    proposal = await creator.prepare(expanded)
+    authorize(creator, proposal)
+    api.records[uid]["id"] += 1
+    stopped = await creator.execute(7, proposal["proposal_id"])
+    assert stopped["status"] == "failed"
+    assert all(method == "GET" for method, _path in api.requests)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("age", "29"),
+        ("sex", "Other"),
+        ("races", [301]),
+        ("locations", [401]),
+        ("races", [True]),
+    ],
+)
+async def test_profile_readback_mismatch_never_reports_success(
+    service, expanded, field, value
+):
+    creator, api = service
+    proposal = await creator.prepare(expanded)
+    authorize(creator, proposal)
+
+    def changed(request):
+        response = handle(api, request)
+        if request.method == "POST" and api._active_key == "post:1":
+            next(row for row in api.records.values() if row["name"] == expanded.name)[
+                field
+            ] = value
+        return response
+
+    await creator._writer.aclose()
+    creator._writer = httpx.AsyncClient(
+        base_url="https://api.kanka.io/1.0/", transport=httpx.MockTransport(changed)
+    )
+    result = await creator.execute(7, proposal["proposal_id"])
+    assert result["status"] == "partial" and result["entity_id"] is not None
+    assert "differs from the approved draft" in result["error"]["message"]
+
+
+async def test_profile_fields_survive_lost_character_response_reconciliation(
+    service, expanded
+):
+    creator, api = service
+    proposal = await creator.prepare(expanded)
+    authorize(creator, proposal)
+    api.lose_response = "character"
+    assert (await creator.execute(7, proposal["proposal_id"]))["status"] == "uncertain"
+    uid = next(uid for uid, row in api.records.items() if row["name"] == expanded.name)
+    evidence = await creator.inspect_reconciliation(7, proposal["proposal_id"], uid)
+    assert evidence["record"]["races"] == [31]
+    assert evidence["record"]["locations"] == [41]
+    creator.store.journal.confirm_reconciled(
+        proposal["proposal_id"],
+        evidence["fingerprint"],
+        evidence["record"],
+        reviewed_by="Trusted reviewer",
+    )
+    api.lose_response = None
+    authorize(creator, proposal)
+    assert (await creator.execute(7, proposal["proposal_id"]))["status"] == "verified"
+    assert sum(method == "POST" for method, _path in api.requests) == 5
 
 
 @pytest.fixture

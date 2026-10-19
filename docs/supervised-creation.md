@@ -2,8 +2,9 @@
 
 The default MCP server remains GET-only with eight tools. Explicit configuration
 adds a narrow character-creation workflow, independently reviewed through a local
-terminal. The new adapter is tested with mocked HTTP and actual stdio/CLI
-processes; it has not yet had a live end-to-end execution test.
+terminal. The adapter is tested with mocked HTTP and actual stdio/CLI processes.
+A separately authorized public synthetic run also passed through the normal
+executor, local approval command and independent MCP read-back in one campaign.
 
 ## Stored proposals and local approval
 
@@ -48,6 +49,11 @@ for complete commands.
 
 The draft supports a character name/HTML description/privacy, outgoing relation
 requests to existing entities, equipped linked inventory, and named HTML posts.
+It also accepts optional text `age`/`sex` and universal `race_entity_ids` and
+`location_entity_ids`. Verified species/location module IDs are used for Kanka's
+`races`/`locations` arrays; reference identity/type changes stop execution. Each
+supplied field is bound into the preview and checked on read-back. Array order
+is not significant; duplicate input references and boolean IDs are rejected.
 Unknown fields, boolean IDs and coerced privacy values fail validation. Character
 privacy defaults to private; relations/posts default to admin visibility.
 Inventory entry privacy is **not configurable** and uses Kanka's default; review
@@ -147,6 +153,22 @@ this new MCP writer. Neither campaign-specific helper nor live IDs/payloads are
 retained in this public project. Development-only fixtures are excluded from the
 installed wheel; retire obsolete one-off scaffolding before release while keeping
 useful automated regression coverage.
+
+After review of draft PR #3, the user separately authorized a public live run of
+the new executor with an expanded biography, age, sex, species and residence.
+Two synthetic fixture dependencies were seeded separately. The normal opt-in
+stdio server then completed five journaled creation steps after exact local
+review/approval under that user authorization. Independent field/attachment
+checks, status, approval replay denial, journal reopening and shutdown passed.
+This local host approval is not evidence of independent human authentication.
+
+The first preflight was rate-limited before any character POST; after cooldown,
+fresh approval continued the same immutable proposal. Extra independent reads
+also completed after cooldown. Quota is shared with other callers; pacing does
+not reserve it. No uncertain POST was retried. All test records remain for user
+inspection, with no deletion authorization. Only token-free pass/fail evidence
+belongs in public documentation; live IDs, biography and campaign payloads stay
+in the private local report.
 
 A new live execution test needs explicit campaign/operation consent and review of
 the exact proposed fields/privacy. Cleanup is separately scoped. Image upload,

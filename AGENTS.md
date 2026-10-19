@@ -119,7 +119,7 @@ Read current Git/remote state at session start; this is a handoff snapshot.
   checksum, never authorization. `progress.py` supplies optional private SQLite
   intent/results, restart recovery and reviewed reconciliation. Intent commits
   before sends; uncertain outcomes never permit blind retry.
-- **New, offline-tested adapter:** `approvals.py` stores immutable proposals and
+- **Scoped adapter:** `approvals.py` stores immutable proposals and
   expiring, atomic single-use local approvals in the same private SQLite file.
   `approve.py` is a separate terminal command; it cannot be called through MCP.
   Local OS file access is the trust boundary. This does not authenticate remote
@@ -150,6 +150,23 @@ Read current Git/remote state at session start; this is a handoff snapshot.
 - Desktop-host UI, remote hosting, multi-user authentication, inventory per-entry
   privacy configuration, upstream transactions, append-only audit retention and
   database migrations remain unverified/unimplemented as applicable.
+
+**Subsequent authorized live acceptance:** the user reviewed draft PR #3 and
+explicitly requested a public synthetic test through the new executor, expanded
+with an HTML biography, text age/sex, species and residence. Optional universal
+`race_entity_ids`/`location_entity_ids` now resolve verified module IDs for Kanka's
+`races`/`locations` arrays and participate in preview, intent and read-back.
+The normal opt-in stdio server and separate local approval command passed the live
+workflow, including five confirmed steps, independent exact field/attachment
+verification, replay denial, journal reopening and shutdown. Two public synthetic
+dependencies were seeded separately; their creation is not an MCP capability.
+An initial GET-only preflight 429 sent no character POST; after cooldown a fresh
+local approval continued the same proposal. Additional read-back completed after
+cooldown. Account pacing cannot reserve quota shared with other clients.
+The local host performed approval under explicit user test authorization; this
+does not prove independent human authentication. Test records remain for user
+inspection; deletion was not requested. No live IDs, payloads or campaign-specific
+helpers are committed. No new standing write permission is implied.
 
 ### Account behavior, completeness and remaining local safeguards
 

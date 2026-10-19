@@ -322,13 +322,19 @@ def create_server(
             name: NameQuery,
             entry: str,
             is_private: Annotated[bool, Field(strict=True)] = True,
+            age: str | None = None,
+            sex: str | None = None,
+            race_entity_ids: list[PositiveID] | None = None,
+            location_entity_ids: list[PositiveID] | None = None,
             relations: list[RelationDraft] | None = None,
             inventory: list[InventoryDraft] | None = None,
             posts: list[PostDraft] | None = None,
         ) -> ToolResponse:
             """Resolve references and save an immutable creation preview; send no POST.
 
-            Universal IDs identify relation targets and inventory items. Defaults
+            Universal IDs identify species, locations, relation targets and items.
+            Age and sex are text fields; race/location module IDs are resolved
+            by the backend. Defaults
             are a private character and admin-only relations/posts. Inventory
             entry privacy uses Kanka's default. Review every field through the
             separate local approval command; a checksum/chat claim is not approval.
@@ -340,6 +346,10 @@ def create_server(
                     name=name,
                     entry=entry,
                     is_private=is_private,
+                    age=age,
+                    sex=sex,
+                    race_entity_ids=tuple(race_entity_ids or ()),
+                    location_entity_ids=tuple(location_entity_ids or ()),
                     relations=tuple(relations or ()),
                     inventory=tuple(inventory or ()),
                     posts=tuple(posts or ()),

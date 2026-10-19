@@ -14,7 +14,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 ID = Annotated[int, Field(strict=True, gt=0)]
 Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
@@ -63,9 +63,21 @@ class CharacterDraft(DraftRecord):
     name: Text
     entry: Text
     is_private: bool = True
+    age: Text | None = None
+    sex: Text | None = None
+    race_entity_ids: tuple[ID, ...] = ()
+    location_entity_ids: tuple[ID, ...] = ()
     relations: tuple[RelationDraft, ...] = ()
     inventory: tuple[InventoryDraft, ...] = ()
     posts: tuple[PostDraft, ...] = ()
+
+    @field_validator("race_entity_ids", "location_entity_ids")
+    @classmethod
+    def unique_references(cls, values: tuple[int, ...]) -> tuple[int, ...]:
+        """Reject repeated references before review or execution."""
+        if len(values) != len(set(values)):
+            raise ValueError("Character references must be unique")
+        return values
 
 
 class CreationScope(DraftRecord):
@@ -97,13 +109,22 @@ def preview_creation(draft: CharacterDraft) -> dict[str, Any]:
     draft = CharacterDraft.model_validate(draft.model_dump())
     base = f"campaigns/{draft.campaign_id}"
     entity = base + "/entities/{entity_id}"
+    core = draft.model_dump(
+        include={"name", "entry", "is_private", "age", "sex"}, exclude_none=True
+    )
+    for field_name, references, kind in (
+        ("races", draft.race_entity_ids, "race"),
+        ("locations", draft.location_entity_ids, "location"),
+    ):
+        if references:
+            core[field_name] = [f"{{{kind}_child_id:{uid}}}" for uid in references]
     operations = [
         {
             "key": "character",
             "operation": "character.create",
             "method": "POST",
             "path": base + "/characters",
-            "body": draft.model_dump(include={"name", "entry", "is_private"}),
+            "body": core,
         }
     ]
     for index, relation in enumerate(draft.relations):
@@ -162,7 +183,7 @@ def resolve_creation_request(
     key: str,
     *,
     entity_id: int | None = None,
-    item_ids: dict[int, int] | None = None,
+    module_ids: dict[int, int] | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Bind only typed IDs in one reviewed operation; never replace lore text."""
     operation = next(
@@ -171,6 +192,18 @@ def resolve_creation_request(
     if operation is None:
         raise ValueError("Unknown creation step")
     path, body = operation["path"], dict(operation["body"])
+    if key == "character":
+        for field_name, references in (
+            ("races", draft.race_entity_ids),
+            ("locations", draft.location_entity_ids),
+        ):
+            if references:
+                values = [(module_ids or {}).get(uid) for uid in references]
+                if any(type(value) is not int or value <= 0 for value in values):
+                    raise ValueError(
+                        f"Character {field_name} require resolved module IDs"
+                    )
+                body[field_name] = values
     if key != "character":
         if type(entity_id) is not int or entity_id <= 0:
             raise ValueError("Attachment requires a positive universal owner ID")
@@ -178,7 +211,7 @@ def resolve_creation_request(
         body["owner_id" if key.startswith("relation:") else "entity_id"] = entity_id
     if key.startswith("inventory:"):
         reference = draft.inventory[int(key.split(":")[1])].item_entity_id
-        child_id = (item_ids or {}).get(reference)
+        child_id = (module_ids or {}).get(reference)
         if type(child_id) is not int or child_id <= 0:
             raise ValueError("Inventory requires a resolved positive module item ID")
         body["item_id"] = child_id

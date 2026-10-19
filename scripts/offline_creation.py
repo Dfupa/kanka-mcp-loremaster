@@ -114,7 +114,9 @@ class OfflineCreation:
             "campaign_id": self.campaign_id,
             "child_id": record["id"],
             "name": record["name"],
-            "type": "item" if entity_id == 201 else "character",
+            "type": record.get(
+                "entity_type", "item" if entity_id == 201 else "character"
+            ),
         }
 
     def _handle(self, request: httpx.Request) -> httpx.Response:
@@ -146,10 +148,16 @@ class OfflineCreation:
                         if name in record["name"].casefold()
                     ]
                 )
-            if len(parts) == 4 and parts[2] in ("characters", "items"):
+            if len(parts) == 4 and parts[2] in (
+                "characters",
+                "items",
+                "races",
+                "locations",
+            ):
                 for key, record in self.records.items():
-                    if record["id"] == int(parts[3]) and (parts[2] == "items") == (
-                        key == 201
+                    if (
+                        record["id"] == int(parts[3])
+                        and parts[2] == self._entity(key)["type"] + "s"
                     ):
                         return response(record)
             if (
@@ -223,7 +231,7 @@ class OfflineCreation:
                 "An uncertain operation requires reconciliation before retry"
             )
 
-        item_ids = {}
+        module_ids = {}
         for relation in draft.relations:
             await self.reader.get_entity_metadata(draft.campaign_id, relation.target_id)
         for item in draft.inventory:
@@ -232,9 +240,18 @@ class OfflineCreation:
             )
             if linked["entity"]["entity_type"] != "item":
                 raise ValueError("Inventory references must identify item entities")
-            item_ids[item.item_entity_id] = linked["entity"]["child_id"]
+            module_ids[item.item_entity_id] = linked["entity"]["child_id"]
+        for expected, references in (
+            ("race", draft.race_entity_ids),
+            ("location", draft.location_entity_ids),
+        ):
+            for uid in references:
+                linked = await self.reader.get_entity(draft.campaign_id, uid)
+                if linked["entity"]["entity_type"] != expected:
+                    raise ValueError(f"Character reference must identify a {expected}")
+                module_ids[uid] = linked["entity"]["child_id"]
         if self.progress_store is not None:
-            self.progress_store.bind(self.execution_id, approved, item_ids)
+            self.progress_store.bind(self.execution_id, approved, module_ids)
         if "character" not in journal:
             matches = await self.reader.find_entities_by_name(
                 draft.campaign_id, draft.name
@@ -271,7 +288,7 @@ class OfflineCreation:
                     )
                 }
             )
-            verify_created(completed, current, item_ids)
+            verify_created(completed, current, module_ids)
             verify_result_ids(journal, current)
 
         for operation in proposal["operations"]:
@@ -280,7 +297,7 @@ class OfflineCreation:
                 continue
             entity_id = journal.get("character", {}).get("entity_id")
             path, body = resolve_creation_request(
-                draft, key, entity_id=entity_id, item_ids=item_ids
+                draft, key, entity_id=entity_id, module_ids=module_ids
             )
             self._active_key = key
             intent_started = False
@@ -364,7 +381,7 @@ class OfflineCreation:
             journal[key] = created
         entity_id = journal["character"]["entity_id"]
         bundle = await get_entity_full(self.reader, draft.campaign_id, entity_id)
-        verify_created(draft, bundle, item_ids)
+        verify_created(draft, bundle, module_ids)
         verify_result_ids(journal, bundle)
         return {
             "status": "verified",

@@ -50,7 +50,14 @@ async def test_real_stdio_with_separate_local_review_process(tmp_path):
                         "approve" in tool.name or "revoke" in tool.name
                         for tool in tools
                     )
-                    draft = offline.example_draft()
+                    draft = offline.example_draft().model_copy(
+                        update={
+                            "age": "28",
+                            "sex": "Male",
+                            "race_entity_ids": (301,),
+                            "location_entity_ids": (401,),
+                        }
+                    )
                     result = await session.call_tool(
                         "prepare_character_creation", draft.model_dump(mode="json")
                     )
@@ -123,6 +130,10 @@ async def test_real_stdio_with_separate_local_review_process(tmp_path):
                     data = full.structuredContent["data"]
                     assert data["details"]["entry"] == draft.entry
                     assert data["details"]["is_private"] is True
+                    assert data["details"]["age"] == "28"
+                    assert data["details"]["sex"] == "Male"
+                    assert data["details"]["races"] == [31]
+                    assert data["details"]["locations"] == [41]
                     assert len(data["sections"]["posts"]["data"]) == 2
                     assert data["sections"]["inventory"]["data"][0]["amount"] == 2
                     assert (

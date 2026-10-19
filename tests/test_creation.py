@@ -17,6 +17,7 @@ from loremaster.creation import (
     PostDraft,
     RelationDraft,
     preview_creation,
+    resolve_creation_request,
 )
 
 ALL_OPERATIONS = frozenset(
@@ -27,6 +28,65 @@ ALL_OPERATIONS = frozenset(
         "post.create",
     }
 )
+
+
+def test_character_fields_preview_and_module_resolution():
+    draft = CharacterDraft(
+        campaign_id=7,
+        name="Expanded",
+        entry="<p>Biography.</p>",
+        age="28",
+        sex="Male",
+        race_entity_ids=(301,),
+        location_entity_ids=(401,),
+    )
+    preview = preview_creation(draft)
+    body = preview["operations"][0]["body"]
+    assert body["age"] == "28" and body["sex"] == "Male"
+    assert body["races"] == ["{race_child_id:301}"]
+    assert body["locations"] == ["{location_child_id:401}"]
+    with pytest.raises(ValueError, match="resolved module IDs"):
+        resolve_creation_request(draft, "character")
+    path, resolved = resolve_creation_request(
+        draft, "character", module_ids={301: 31, 401: 41}
+    )
+    assert path == "campaigns/7/characters"
+    assert resolved["races"] == [31] and resolved["locations"] == [41]
+    assert preview["operations"][0]["body"] == body
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"age": 28},
+        {"sex": True},
+        {"age": " "},
+        {"race_entity_ids": (True,)},
+        {"location_entity_ids": (0,)},
+        {"race_entity_ids": (301, 301)},
+        {"location_entity_ids": (401, 401)},
+    ],
+)
+def test_invalid_character_profile_fields_are_rejected(values):
+    with pytest.raises(ValidationError):
+        CharacterDraft(campaign_id=7, name="Expanded", entry="Description", **values)
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"age": "28"},
+        {"sex": "Male"},
+        {"race_entity_ids": (301,)},
+        {"location_entity_ids": (401,)},
+    ],
+)
+def test_profile_fields_change_the_reviewed_digest(values):
+    draft = CharacterDraft(campaign_id=7, name="Expanded", entry="Description")
+    assert (
+        preview_creation(draft)["content_digest"]
+        != preview_creation(draft.model_copy(update=values))["content_digest"]
+    )
 
 
 @pytest.fixture

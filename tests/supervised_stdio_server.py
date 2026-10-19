@@ -14,6 +14,24 @@ from loremaster.server import main
 
 if __name__ == "__main__":
     rehearsal = offline.OfflineCreation()
+    rehearsal.records.update(
+        {
+            301: {
+                "id": 31,
+                "entity_id": 301,
+                "name": "Synthetic species",
+                "entry": "Species",
+                "entity_type": "race",
+            },
+            401: {
+                "id": 41,
+                "entity_id": 401,
+                "name": "Synthetic home",
+                "entry": "Home",
+                "entity_type": "location",
+            },
+        }
+    )
 
     def client(token, **kwargs):
         return KankaClient(

@@ -87,6 +87,8 @@ class CreationService:
         for uid in dict.fromkeys(
             [r.target_id for r in draft.relations]
             + [i.item_entity_id for i in draft.inventory]
+            + list(draft.race_entity_ids)
+            + list(draft.location_entity_ids)
         ):
             record = await self.reader.get_entity_metadata(draft.campaign_id, uid)
             result["entities"][str(uid)] = {
@@ -100,6 +102,14 @@ class CreationService:
             if linked["entity"]["entity_type"] != "item":
                 raise ValueError("Inventory references must identify item entities")
             result["item_ids"][str(item.item_entity_id)] = linked["details"]["id"]
+        for expected, references in (
+            ("race", draft.race_entity_ids),
+            ("location", draft.location_entity_ids),
+        ):
+            for uid in references:
+                linked = await self.reader.get_entity(draft.campaign_id, uid)
+                if linked["entity"]["entity_type"] != expected:
+                    raise ValueError(f"Character reference must identify a {expected}")
         return result
 
     async def prepare(self, draft: CharacterDraft) -> dict[str, Any]:
@@ -214,8 +224,14 @@ class CreationService:
         refs = await self._references(draft)
         if refs != self.store.review(proposal_id)["references"]:
             raise ValueError("Referenced identities changed after review")
-        item_ids = {int(key): value for key, value in refs["item_ids"].items()}
-        journal.bind(proposal_id, approved, item_ids)
+        module_ids = {int(key): value for key, value in refs["item_ids"].items()}
+        module_ids.update(
+            {
+                uid: refs["entities"][str(uid)]["child_id"]
+                for uid in draft.race_entity_ids + draft.location_entity_ids
+            }
+        )
+        journal.bind(proposal_id, approved, module_ids)
         uid = progress.get("character", {}).get("entity_id")
         if uid is None:
             matches = await self.reader.find_entities_by_name(
@@ -224,14 +240,14 @@ class CreationService:
             if matches["exact"]:
                 raise ValueError("Character name already exists; no creation was sent")
         else:
-            await self._verify(draft, progress, item_ids)
+            await self._verify(draft, progress, module_ids)
         for operation in preview_creation(draft)["operations"]:
             key = operation["key"]
             if key in progress:
                 continue
             self._active_step = key
             path, body = resolve_creation_request(
-                draft, key, entity_id=uid, item_ids=item_ids
+                draft, key, entity_id=uid, module_ids=module_ids
             )
             budget = self.reader._budget.get()
             if budget is None:
@@ -285,7 +301,7 @@ class CreationService:
             journal.finish(proposal_id, key, "confirmed", data)
             progress[key] = data
             uid = progress["character"]["entity_id"]
-        bundle = await self._verify(draft, progress, item_ids)
+        bundle = await self._verify(draft, progress, module_ids)
         self.store.complete(proposal_id, approved)
         return {
             "proposal_id": proposal_id,
@@ -301,7 +317,7 @@ class CreationService:
         self,
         draft: CharacterDraft,
         progress: dict[str, Any],
-        item_ids: dict[int, int],
+        module_ids: dict[int, int],
     ) -> dict[str, Any]:
         self._active_step = "verification"
         uid = progress["character"]["entity_id"]
@@ -330,7 +346,7 @@ class CreationService:
                 )
             }
         )
-        verify_created(partial, bundle, item_ids)
+        verify_created(partial, bundle, module_ids)
         verify_result_ids(progress, bundle)
         return bundle
 

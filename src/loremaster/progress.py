@@ -81,7 +81,7 @@ class CreationJournal:
     def bind(
         self, execution_id: str, approved: ApprovedCreation, refs: dict[int, int]
     ) -> dict[str, Any]:
-        """Bind a stable execution ID to content, campaign and resolved item IDs.
+        """Bind a stable execution ID to content, campaign and resolved module IDs.
 
         A newly issued approval may resume the same execution, but changed
         content or references cannot reuse its ID. Identical drafts with distinct
@@ -93,7 +93,7 @@ class CreationJournal:
             for pair in refs.items()
             for value in pair
         ):
-            raise ValueError("Resolved item references must be positive integer IDs")
+            raise ValueError("Resolved module references must be positive integer IDs")
         values = (
             execution_id,
             approved.draft.campaign_id,
@@ -166,7 +166,7 @@ class CreationJournal:
                 approved.draft,
                 key,
                 entity_id=progress.get("character", {}).get("entity_id"),
-                item_ids={
+                module_ids={
                     int(key): value
                     for key, value in json.loads(execution["refs"]).items()
                 },

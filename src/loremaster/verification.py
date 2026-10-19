@@ -3,7 +3,7 @@
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
-from loremaster.creation import CharacterDraft
+from loremaster.creation import CharacterDraft, resolve_creation_request
 from loremaster.kanka import KankaError
 
 
@@ -13,7 +13,14 @@ def matches_creation_fields(expected: dict[str, Any], actual: dict[str, Any]) ->
         if key == "two_way":
             continue  # Request-only field; no live one-way guarantee is inferred.
         observed = actual.get(key)
-        if key == "amount":
+        if key in ("races", "locations"):
+            if (
+                not isinstance(observed, list)
+                or any(type(uid) is not int or uid <= 0 for uid in observed)
+                or sorted(observed) != sorted(value)
+            ):
+                return False
+        elif key == "amount":
             try:
                 if type(observed) not in (str, int, float) or Decimal(
                     str(observed)
@@ -43,7 +50,7 @@ def verify_result_ids(journal: dict[str, Any], bundle: dict[str, Any]) -> None:
 
 
 def verify_created(
-    draft: CharacterDraft, bundle: dict[str, Any], item_ids: dict[int, int]
+    draft: CharacterDraft, bundle: dict[str, Any], module_ids: dict[int, int]
 ) -> None:
     """Verify requested fields; accept numeric quantities and actual relation schemas.
 
@@ -55,11 +62,8 @@ def verify_created(
     ):
         raise KankaError("Created entity could not be read back completely")
     details = bundle["details"]
-    if any(
-        type(details.get(key)) is not type(getattr(draft, key))
-        or details.get(key) != getattr(draft, key)
-        for key in ("name", "entry", "is_private")
-    ):
+    _path, core = resolve_creation_request(draft, "character", module_ids=module_ids)
+    if not matches_creation_fields(core, details):
         raise KankaError("Created entity differs from the approved draft")
     expected = {
         "posts": [post.model_dump() for post in draft.posts],
@@ -69,7 +73,7 @@ def verify_created(
         ],
         "inventory": [
             {
-                "item_id": item_ids[item.item_entity_id],
+                "item_id": module_ids[item.item_entity_id],
                 "amount": str(item.amount),
                 "is_equipped": item.is_equipped,
                 "position": item.position,

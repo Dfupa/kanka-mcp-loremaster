@@ -250,9 +250,11 @@ live campaign requests.
 
 ## Optional supervised creation
 
-This feature is opt-in and has been validated **offline with mocked HTTP**,
-including a real stdio server and separate approval process. The new execution
-adapter has not yet been tested against a live campaign. Leave these variables
+This feature is opt-in. Offline validation uses mocked HTTP, a real stdio server
+and separate approval process. A separately authorized public synthetic live run
+also passed through the normal executor and local approval command, including
+profile fields, attachments, independent read-back and durable status. This does
+not establish behavior for every account or permission set. Leave these variables
 unset for the normal eight read-only tools.
 
 Select an existing private directory outside Git, replace the sample paths/IDs,
@@ -283,6 +285,13 @@ entities; item module IDs are resolved by the backend. Character privacy default
 to private, relations/posts to admin visibility. **Inventory entry privacy uses
 Kanka's default and is not configurable in this slice.** Review those consequences
 before approving. This narrow workflow does not create the referenced mentor/item.
+
+Optional `age` and `sex` are text fields. `race_entity_ids` (species) and
+`location_entity_ids` accept lists of universal entity IDs. The backend verifies
+their module types and resolves the module IDs for Kanka's `races` and `locations`
+arrays. These fields participate in review, durable intent and read-back checks;
+they are not free-form relationships or description-only mentions. See the
+[character API contract](https://app.kanka.io/api-docs/1.0/characters).
 
 After preparing a proposal, review it through the separate local command:
 
