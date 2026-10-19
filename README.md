@@ -284,15 +284,24 @@ same-instance retries without duplicates. Resuming a rejected step requires a
 new proposal/grant and verifies completed data before further writes. Changed
 completed data, lost/malformed responses, cancellation during send, unexpected
 redirects and ambiguous HTTP failures block continuation pending reconciliation.
-The progress journal exists only within a rehearsal instance: this is not
-production authorization, durable idempotency or evidence of live write support.
+By default the progress journal exists only within a rehearsal instance. Python
+callers can explicitly supply a private `CreationJournal` and stable execution ID
+to rehearse recovery across executor restarts. Intent is committed before each
+send; confirmed IDs are restored, while uncertain steps remain blocked until
+reviewed reconciliation. These are offline recovery checks, not production
+authorization or evidence of a deployed write service.
 Inventory visibility parameters require live contract verification before a
 real adapter is implemented (the API docs contain a misspelled parameter).
 See [the supervised-creation contract](docs/supervised-creation.md) for the trust
 boundary and remaining recovery work.
-The next checkpoint is the [offline synthetic creation workflow](docs/synthetic-creation-validation.md):
-review its frozen scenario, validate it and inspect the expected/observed report
-before starting durable tracking or reconciliation. Its validation is pending.
+The [synthetic acceptance workflow](docs/synthetic-creation-validation.md) is now
+covered by SDK dispatch and a real stdio MCP session reading the created fixture.
+Run `pytest -q -rP tests/test_creation_server.py` to see the synthetic
+expected/observed report. Tests also cover restart recovery and explicit
+reconciliation in `tests/test_progress.py`. Test servers are development-only,
+excluded from the installed package; no permanent synthetic MCP tools are added.
+The user's separate manual creation check was accepted and its records removed
+by the user. That one-off live script is not included in this project.
 
 ## Limits and next milestones
 

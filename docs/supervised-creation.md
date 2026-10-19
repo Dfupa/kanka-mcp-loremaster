@@ -56,34 +56,66 @@ is preserved; only typed owner/item fields and fixed endpoint templates are boun
 | Verification failure | Report the mismatch; do not claim success or delete records |
 
 Audit output includes proposal ID, content checksum and reviewer. It contains no
-grant token. Discarding the rehearsal discards its synthetic campaign and journal;
+grant token. Discarding the rehearsal discards its synthetic campaign and default
+in-memory journal. An explicitly supplied durable journal remains on disk;
 there are no cleanup or rollback HTTP requests.
 
-## Recovery work before a real executor
+## Durable progress and explicit reconciliation
 
-The next checkpoint is the [offline synthetic acceptance workflow](synthetic-creation-validation.md).
-Review and validate that scenario before implementing the recovery work below.
-Its acceptance/reporting status is tracked in that runbook; existing regression
-test success alone does not complete the checkpoint.
+The [synthetic acceptance workflow](synthetic-creation-validation.md) now has
+focused SDK dispatch and actual stdio coverage against freshly created mock state.
+The user separately accepted the manual live example and deleted its records.
+The campaign-specific live script is not retained as a product feature. Test
+servers remain under `tests/`, outside the installed package; they expose only
+the existing eight read tools. Retire obsolete demonstration scaffolding for the
+final release while preserving automated regression coverage.
 
-The gate and journal are process-local. They do not provide durable idempotency,
-multi-process coordination, atomic Kanka transactions or production authorization.
-Approval does not freeze referenced records. Current same-instance read-back
-checks detect edits to completed data but cannot eliminate races between reads
-and writes. Human identity/roles and private storage of proposals/audit data are
-the responsibility of a future authenticated host.
+`loremaster.progress.CreationJournal` uses standard-library SQLite. Nothing opens
+a database by default. Python rehearsal callers must explicitly provide both a
+private journal and an execution ID:
 
-A future durable journal must bind a unique proposal/operation ID to the approved
-content, campaign, resolved references and request fingerprint; record intent
-before sending; and retain confirmed result IDs and verification state. A content
-hash alone must not conflate a retry with a separately approved new request.
-Do not persist tokens or campaign payloads in this public repository.
+```python
+store = CreationJournal(private_path)  # Existing private parent, outside Git.
+rehearsal = OfflineCreation(progress_store=store, execution_id="session-test-1")
+```
 
-After a crash or uncertain response, inspect authoritative scoped records and
-match the operation's identity/content before marking it complete. Missing or
-ambiguous evidence requires human reconciliation. A new approval must never
-erase uncertainty or trigger an automatic retry of an uncertain POST. Storage and
-reconciliation adapters are intentionally not implemented in this slice.
+The caller closes both the rehearsal and `store`. The CLI remains a disposable
+in-memory example. Restart tests preserve the simulated upstream campaign while
+reopening the executor; the journal does not persist a fake campaign or revive
+an expired/consumed approval.
+
+- The execution ID identifies the logical request independently of its content
+  checksum. Bindings include campaign, digest and resolved universal/module item
+  references. A changed draft/reference cannot reuse the execution ID.
+- Each step records the exact resolved POST fingerprint, request body, reviewer
+  and approval reference. Intent commits **before** sending. Atomic intent checks
+  reject competing sends of the same step.
+- Confirmed results retain record/universal/owner IDs. These are response
+  identities, not a claim that final lore verification already passed. Every
+  resume re-reads completed fields **and IDs**, and final read-back is still required.
+- An interrupted intent or uncertain response blocks sends after restart. Known
+  rejections may resume with a fresh grant; approvals themselves remain process-local.
+- `await rehearsal.reconcile(candidate_id)` inspects an explicit candidate using
+  GETs and returns evidence without changing progress. Character candidates use
+  universal IDs; attachments use their own record IDs. Missing, mismatched,
+  inaccessible or incomplete evidence never clears uncertainty.
+- After the trusted host has stopped other workers and verified the candidate's
+  origin, it may call `reconcile(candidate_id, reviewed_by=...)` to record the
+  matching evidence. Matching content alone does not prove origin. This operation
+  issues no grant and sends no POST; resuming still requires fresh approval.
+
+New journal files use mode 0600; insecure existing files and symlinks are rejected.
+Bodies can contain private lore, so keep the file and its directory outside the
+public repository. Bearer/approval tokens and raw upstream error bodies are not
+stored. The store retains the current attempt per step, not a complete append-only
+audit history. No migration or production journal retention policy is provided yet.
+
+This is tested offline recovery, not production authorization, automatic
+reconciliation or distributed transaction support. A host must authenticate
+reviewers, stop workers during reconciliation and protect local storage. Approval
+does not freeze referenced records; read-before-write checks cannot eliminate
+upstream races. Unknown outcomes never become safe retries merely because a
+search found nothing.
 
 Before enabling any real execution, verify the actual write-response and
 inventory-visibility contracts, obtain separate write consent, select an explicit

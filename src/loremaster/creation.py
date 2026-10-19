@@ -156,6 +156,34 @@ def preview_creation(draft: CharacterDraft) -> dict[str, Any]:
     return {**proposal, "content_digest": digest}
 
 
+def resolve_creation_request(
+    draft: CharacterDraft,
+    key: str,
+    *,
+    entity_id: int | None = None,
+    item_ids: dict[int, int] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Bind only typed IDs in one reviewed operation; never replace lore text."""
+    operation = next(
+        (op for op in preview_creation(draft)["operations"] if op["key"] == key), None
+    )
+    if operation is None:
+        raise ValueError("Unknown creation step")
+    path, body = operation["path"], dict(operation["body"])
+    if key != "character":
+        if type(entity_id) is not int or entity_id <= 0:
+            raise ValueError("Attachment requires a positive universal owner ID")
+        path = path.replace("{entity_id}", str(entity_id))
+        body["owner_id" if key.startswith("relation:") else "entity_id"] = entity_id
+    if key.startswith("inventory:"):
+        reference = draft.inventory[int(key.split(":")[1])].item_entity_id
+        child_id = (item_ids or {}).get(reference)
+        if type(child_id) is not int or child_id <= 0:
+            raise ValueError("Inventory requires a resolved positive module item ID")
+        body["item_id"] = child_id
+    return path, body
+
+
 @dataclass(frozen=True)
 class ApprovalGrant:
     """An opaque, single-use capability. Never log or include token in a preview."""

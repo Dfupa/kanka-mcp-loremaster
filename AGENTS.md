@@ -24,12 +24,12 @@ The system must know the difference between **reading established lore** and
 - The current slice is the shared proposal/approval contract and offline
   supervised-creation verification. Keep the next PR focused and in draft for
   review; merging and live write authorization remain separate decisions.
-- **Next checkpoint, as requested by the user:** design and validate the
-  **offline-only** synthetic creation workflow in
-  `docs/synthetic-creation-validation.md` before implementing durable progress
-  tracking, reconciliation or further creation features. The design is ready;
-  focused validation/reporting and results review remain pending. Do not infer
-  acceptance from previously passing regression tests.
+- **Current checkpoint:** the user accepted the manual synthetic creation check
+  and reported deleting the test entities. Automated SDK/stdio acceptance checks
+  now exercise the created state. Continue the durable offline progress and
+  explicit reconciliation slice; consult `docs/supervised-creation.md` and
+  `docs/synthetic-creation-validation.md`. Keep test fixtures outside the release
+  package and never expose permanent synthetic test tools in the MCP server.
 - Continue from the latest remote branch, not an earlier chat-generated ZIP.
 - `README.md` now documents the verified implementation, setup and limitations.
   Keep it accurate as functionality and branch setup change.
@@ -138,10 +138,10 @@ claim that files or CI results will remain unchanged.
   option or token/environment loading. The CLI preview and approved execution
   passed. Tests cover rejected steps, partial progress, same-instance retries
   without duplicates, uncertain outcomes and content mismatches.
-- The rehearsal journal is **in memory only**. Timeouts/5xx block blind retry
+- The baseline rehearsal journal was **in memory only**. Timeouts/5xx block blind retry
   pending reconciliation. Durable idempotency, production approval enforcement,
   transaction guarantees, live creation/editing/deletion and uploads are not
-  implemented or verified. No real Kanka record has been changed.
+  implemented or verified at that baseline. See the one-off exception below.
 - Tests include synthetic API boundary cases and an actual subprocess SDK stdio
   session dispatching all eight tools, output schemas, errors, recovery and
   cleanup. `.github/workflows/tests.yml` runs offline checks without credentials.
@@ -176,10 +176,41 @@ continuation. Read `docs/supervised-creation.md` for the trust/recovery contract
 
 PR #1's baseline evidence above remains historical. Inspect the current branch's
 exact commit and tests for new changes. The production MCP still has eight
-read-only tools. Durable recovery, host authentication and real execution remain
-unimplemented; live writes need separate consent and a disposable campaign.
+read-only tools. Durable progress is now available only to explicitly configured
+offline rehearsals through `loremaster.progress.CreationJournal`. It commits
+resolved request intent before sending, restores confirmed IDs across restarts,
+and blocks uncertain steps. Explicit candidate read-back/reviewer confirmation
+can reconcile a step; execution still needs a fresh process-local approval.
+Host authentication and a production write adapter remain unimplemented.
 
 ### Account behavior, completeness and remaining local safeguards
+
+**One-off live exception (2026-10-19):** after the offline design, the user
+explicitly requested one synthetic creation run in their selected current campaign
+and then required all new records/attachments to be public. The interrupted
+private attempt performed no writes. A temporary, separate direct-API script
+subsequently made seven successful POSTs: three synthetic core records (character,
+mentor and compass), one relation, one inventory entry and two posts. Production
+MCP tools remain read-only; this is not standing authorization for future writes
+or deletion. The user subsequently confirmed that the test worked and that they
+deleted the synthetic records themselves. Do not recreate them to verify cleanup.
+
+Live read-back through MCP `get_entity_full` and additional scoped GETs confirmed
+the description, public core records/posts/relation/inventory, two equipped linked
+compasses at Belt and distinct post IDs. Kanka also created a mirrored relation
+despite `two_way: false`; the user explicitly asked to ignore this issue. Preserve
+the observation without treating it as a blocker or investigating it in this slice.
+Do not claim a live one-way guarantee. Inventory
+read-back used numeric `amount: 2` and `visibility_id: 1`, rather than the mock's
+string amount/visibility assumptions. Some create endpoints returned HTTP 201.
+
+The temporary script passed four mocked checks and Ruff. Its token-free local
+report was local only; no live payloads or new IDs were published to GitHub. The
+one-off live script is internal test scaffolding, not a file to retain in the
+project. Automated creation/server fixtures live under `tests/` and are excluded
+from the installed package; deprecate obsolete scaffolding before the final
+release, preserving useful regression tests. Manual acceptance does not
+authenticate a production approval surface or enable MCP writes.
 
 - Follow the user's decision to adapt to actual account allowances rather than
   increasing fixed limits or hardcoding free/premium tiers. Aggregate reads use
@@ -498,9 +529,8 @@ If blocked, give the specific error and a realistic next step; do not claim
 future work has already been carried out.
 
 **Continuation suggestion:** "Read AGENTS.md and docs/supervised-creation.md on
-feat/supervised-creation. First review and validate the offline-only synthetic
-workflow in docs/synthetic-creation-validation.md and report expected versus
-observed results before extending recovery or host integration. Inspect the
-shared approval contract, rehearsal, tests and current PR/CI. Keep live
+feat/supervised-creation. Review the durable offline progress/reconciliation and
+development-only SDK/stdio acceptance tests, then design the authenticated host
+approval surface and production executor separately. Inspect current PR/CI. Keep live
 Kanka read-only until new write consent and a disposable campaign are supplied.
 Preserve secrets and existing user files."

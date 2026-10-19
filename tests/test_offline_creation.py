@@ -1,47 +1,13 @@
 """Rehearse approved creation, partial failures and read-back without networking."""
 
 import asyncio
-from importlib.util import module_from_spec, spec_from_file_location
-from pathlib import Path
-from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from creation_fixtures import approved, offline
 from pydantic import ValidationError
 
 from loremaster.kanka import KankaError
-
-spec = spec_from_file_location(
-    "offline_creation",
-    Path(__file__).resolve().parents[1] / "scripts" / "offline_creation.py",
-)
-assert spec is not None and spec.loader is not None
-offline = module_from_spec(spec)
-spec.loader.exec_module(offline)
-
-
-@pytest.fixture
-async def rehearsal(monkeypatch):
-    """Make any attempt to use a real HTTP transport fail the test."""
-    network = AsyncMock(side_effect=AssertionError("Real networking is forbidden"))
-    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", network)
-    simulation = offline.OfflineCreation()
-    try:
-        yield simulation
-    finally:
-        await simulation.aclose()
-    network.assert_not_awaited()
-    assert simulation._writer.is_closed
-    assert simulation.reader._http.is_closed
-
-
-def approved(rehearsal, draft):
-    proposal = rehearsal.prepare(draft)
-    return rehearsal.gate.approve(
-        proposal["proposal_id"],
-        reviewed_digest=proposal["content_digest"],
-        approved_by="offline-test-reviewer",
-    )
 
 
 async def test_complete_creation_description_relation_inventory_and_two_posts(

@@ -1,13 +1,16 @@
 # Synthetic creation acceptance workflow
 
-**Scenario ID: `synthetic-character-v1`. Status: designed; validation pending.**
+**Scenario ID: `synthetic-character-v1`. Status: automated server validation passed.**
 Scope: offline only, using
 the existing `OfflineCreation` fixture and mandatory HTTPX `MockTransport`.
 This checkpoint precedes durable progress tracking, reconciliation and further
 creation features. No Kanka account, real campaign or API token is involved.
 
-The existing regression suite is supporting evidence. Its previous green run
-does not mark this newly specified acceptance checkpoint complete.
+`tests/test_creation_server.py` now dispatches the frozen scenario through the
+SDK and an actual stdio MCP session. It independently compares expected/observed
+fields, verifies IDs, seed isolation, mutation counts and shutdown. The user's
+separate manual live check was accepted; the user deleted those test entities.
+The campaign-specific live helper is not part of the project or release.
 
 ## Frozen scenario
 
@@ -96,8 +99,8 @@ suite; these cases define the focused acceptance report.
 | Previously consumed grant submitted again | Rejected; no additional HTTP requests or created records |
 
 The partial/uncertain cases end with accurate reporting and stopped execution.
-Implementing recovery, restart persistence or reconciliation is outside this
-checkpoint. Existing same-instance retry tests remain regression coverage.
+Recovery is a subsequent, separately tested layer in `tests/test_progress.py`;
+it does not change these acceptance expectations or grant live write permission.
 
 ## Validation commands and report
 
@@ -107,14 +110,16 @@ The existing CLI supports preview and mock execution:
 python scripts/offline_creation.py
 python scripts/offline_creation.py --approve CONTENT_DIGEST_FROM_REVIEWED_PREVIEW
 pytest -q tests/test_creation.py tests/test_offline_creation.py
+pytest -q -rP tests/test_creation_server.py
+pytest -q tests/test_progress.py
 ```
 
 Use the returned checksum rather than hardcoding it. The CLI currently prints a
 completion/audit summary and omits the aggregate bundle. During the validation
-step, add a focused acceptance test or synthetic report that performs the MCP
-reads, frozen field comparisons and seed-isolation checks above. Do not infer
-those checks passed from a CLI `status: verified` line alone. No new writer or
-durable storage is required to produce this evidence.
+step, the focused server tests perform the MCP reads, frozen field comparisons
+and seed-isolation checks above. `-rP` prints the expected/observed JSON report
+for passing tests. Do not infer these checks passed from the CLI's
+`status: verified` line alone. The tests need no live writer or credentials.
 
 The human-readable report must include:
 
@@ -132,7 +137,11 @@ the synthetic workflow only, without establishing Kanka's live API behavior.
 
 | Evidence | Current status |
 | --- | --- |
-| Scenario and acceptance design | Ready for review |
-| Focused workflow validation and expected/observed report | Pending |
-| Checkpoint results review | Pending |
-| Durable tracking/reconciliation implementation | Deferred until this checkpoint is validated |
+| Scenario and acceptance design | Implemented in focused tests |
+| Focused workflow validation and expected/observed report | SDK and actual stdio checks passed; reproduce with `-rP` above |
+| Manual example review | User accepted the live test and reported deleting its records |
+| Durable tracking/reconciliation implementation | Implemented for optional offline rehearsal use; tested separately |
+
+The test fixture retains its deterministic outgoing relation expectation. The
+user asked not to pursue the live `two_way` discrepancy; it is not a blocker for
+this slice, and no live one-way guarantee is claimed.
