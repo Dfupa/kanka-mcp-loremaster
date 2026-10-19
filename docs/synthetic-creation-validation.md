@@ -3,14 +3,21 @@
 **Scenario ID: `synthetic-character-v1`. Status: automated server validation passed.**
 Scope: offline only, using
 the existing `OfflineCreation` fixture and mandatory HTTPX `MockTransport`.
-This checkpoint precedes durable progress tracking, reconciliation and further
-creation features. No Kanka account, real campaign or API token is involved.
+This original checkpoint preceded durable progress and supervised execution;
+those now have separate coverage described below. No Kanka account, real campaign
+or API token is involved in these tests.
 
 `tests/test_creation_server.py` now dispatches the frozen scenario through the
 SDK and an actual stdio MCP session. It independently compares expected/observed
 fields, verifies IDs, seed isolation, mutation counts and shutdown. The user's
 separate manual live check was accepted; the user deleted those test entities.
 The campaign-specific live helper is not part of the project or release.
+
+The optional writer now reuses this frozen scenario through
+`tests/test_supervised_execution.py` and `tests/test_supervised_stdio.py`, with
+separate local approval and mocked HTTP. The original read-server fixture below
+retains its eight-tool contract; it is not the optional eleven-tool server.
+See [the current execution contract](supervised-creation.md) for those additions.
 
 ## Frozen scenario
 
@@ -39,7 +46,8 @@ do not assume its universal ID equals its character module ID.
 | Post two | `Test post two`; `<p>Second synthetic note.</p>`; visibility `3` (admin) |
 
 The mentor/item are seeded dependencies. Creating them is not part of the five
-operations. The relation is outgoing only; no reciprocal edge is expected.
+operations. The mock creates an outgoing edge without a reciprocal edge; this
+does not promise live one-way behavior from Kanka.
 Inventory visibility behavior is not established by this test: it is not an
 explicit field in the current draft. Verify only the approved fields above.
 

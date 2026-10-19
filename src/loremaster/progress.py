@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any
 
 from loremaster.creation import ApprovedCreation, resolve_creation_request
+from loremaster.verification import matches_creation_fields
 
 
 def fingerprint(path: str, body: dict[str, Any]) -> str:
@@ -80,7 +81,7 @@ class CreationJournal:
     def bind(
         self, execution_id: str, approved: ApprovedCreation, refs: dict[int, int]
     ) -> dict[str, Any]:
-        """Bind a stable execution ID to content, campaign and resolved item IDs.
+        """Bind a stable execution ID to content, campaign and resolved module IDs.
 
         A newly issued approval may resume the same execution, but changed
         content or references cannot reuse its ID. Identical drafts with distinct
@@ -92,7 +93,7 @@ class CreationJournal:
             for pair in refs.items()
             for value in pair
         ):
-            raise ValueError("Resolved item references must be positive integer IDs")
+            raise ValueError("Resolved module references must be positive integer IDs")
         values = (
             execution_id,
             approved.draft.campaign_id,
@@ -125,6 +126,16 @@ class CreationJournal:
                 result["uncertain"] = row["key"]
         return result
 
+    def states(self, execution_id: str) -> dict[str, str]:
+        """Read each step's latest outcome without exposing stored request bodies."""
+        self._id(execution_id)
+        return dict(
+            self._db.execute(
+                "SELECT key, state FROM steps WHERE execution_id = ? ORDER BY rowid",
+                (execution_id,),
+            ).fetchall()
+        )
+
     def begin(
         self,
         execution_id: str,
@@ -155,7 +166,7 @@ class CreationJournal:
                 approved.draft,
                 key,
                 entity_id=progress.get("character", {}).get("entity_id"),
-                item_ids={
+                module_ids={
                     int(key): value
                     for key, value in json.loads(execution["refs"]).items()
                 },
@@ -264,10 +275,7 @@ class CreationJournal:
         if row["fingerprint"] != fingerprint:
             raise ValueError("Reviewed intent does not match pending operation")
         identity = self._identity(result)
-        if any(
-            type(result.get(field)) is not type(value) or result[field] != value
-            for field, value in row["body"].items()
-        ):
+        if not matches_creation_fields(row["body"], result):
             raise ValueError("Reconciled record differs from the pending request")
         if row["key"] == "character" and "entity_id" not in identity:
             raise ValueError("Reconciled character lacks its universal entity ID")

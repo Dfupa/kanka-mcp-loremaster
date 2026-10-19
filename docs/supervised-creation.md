@@ -1,125 +1,175 @@
-# Supervised creation: first offline slice
+# Supervised character creation
 
-The production MCP client and all eight tools remain GET-only. This slice adds
-a reusable proposal and approval boundary, exercised by the isolated rehearsal.
-It supplies no live writer, mutation MCP tools, authentication service or UI.
+The default MCP server remains GET-only with eight tools. Explicit configuration
+adds a narrow character-creation workflow, independently reviewed through a local
+terminal. The adapter is tested with mocked HTTP and actual stdio/CLI processes.
+A separately authorized public synthetic run also passed through the normal
+executor, local approval command and independent MCP read-back in one campaign.
 
-## Proposal and approval contract
+## Stored proposals and local approval
 
-1. Validate an immutable `CharacterDraft`. The draft supports a description,
-   outgoing one-way relations, linked inventory and posts. Unknown fields,
-   boolean IDs and invalid values fail validation. References use universal
-   entity IDs; the executor resolves item module IDs before execution.
-2. `ApprovalGate.prepare` checks the whole proposal against explicitly allowed
-   campaign IDs and operation classes: `character.create`, `relation.create`,
-   `inventory.add`, `post.create`. The default scope permits nothing. It stores a
-   validated copy and returns a proposal ID, ordered preview, content checksum
-   and remaining lifetime. Returned preview dictionaries cannot edit that copy.
-3. A **trusted host**, after authenticating the reviewer and displaying the exact
-   stored proposal, calls `approve` with its ID, reviewed checksum and reviewer
-   identity. The checksum is public review metadata; it cannot authorize a run.
-   The host must never accept an LLM-supplied claim of human approval. The current
-   Python `approved_by` argument records attribution, not authentication.
-4. `approve` issues an opaque random `ApprovalGrant`. Only that grant can be
-   claimed. Tokens must stay outside model-visible previews, logs and tool
-   results. The proposal expires after five minutes by default; approval does
-   not extend its lifetime. Pending records are bounded and expired/revoked
-   records are removed when preparing another proposal.
-5. `claim` consumes the grant atomically and returns the server-stored draft with
-   approval audit metadata. Concurrent claims cannot both succeed. Forged,
-   foreign, expired, revoked or previously consumed grants are rejected.
-6. Scope, expiry and revocation are checked again before every simulated POST.
-   A policy change also applies to existing proposals/grants. Approval and policy
-   methods are trusted backend calls, not model-callable MCP tools. A restart
-   discards all approval records and does not restore execution permission.
+1. `prepare_character_creation` validates an immutable `CharacterDraft`, checks
+   explicit campaign and operation scope, reads campaign/reference identities,
+   rejects an existing exact name, and stores the proposal. It sends no POST.
+   References use universal IDs; inventory item module IDs are resolved by GET.
+2. `LocalApprovals` stores the draft and reviewed campaign/reference identities
+   in an explicitly selected private SQLite file. Its `review_digest` binds that
+   entire payload. The preview's `content_digest` binds ordered request templates.
+   Neither checksum is an execution capability. Returned copies cannot edit the
+   stored draft. Each proposal has a stable ID, also used as its execution ID.
+3. The separate `kanka-loremaster-approve` command displays the exact stored
+   review and current progress. `approve` requires an interactive terminal and
+   the exact displayed proposal/digest phrase. It records the OS username and
+   authorizes five minutes from confirmation. Review/approval/revocation do not
+   require an API token. No approval/revocation method is an MCP tool.
+4. Execution atomically consumes the approval, even across database connections.
+   The executor takes its draft only from storage; callers cannot submit arbitrary
+   paths, bodies, reviewer claims or flags. Each send rechecks current scope,
+   expiry, revocation and the exact approved content.
+5. Used, expired or interrupted approvals cannot be reused. A rejected/partial
+   run needs a new explicit local review/approval. Uncertain intent must first
+   be reconciled; issuing another approval cannot erase uncertainty.
 
-The module contains no HTTP executor. Only the rehearsal uses these grants now.
-Its CLI `--approve CONTENT_DIGEST` is the trusted adapter for reviewing a fixed
-synthetic example and issuing a grant within that same process.
+**Local trust boundary:** OS access to the private file authorizes the command.
+The username is attribution, not remote authentication. Same-OS administrators
+and agents with equivalent shell/file access are trusted. An interactive terminal
+avoids accidental headless approvals; it is not proof of a human identity. Remote
+hosting, multi-user authentication and independent GM/player authorization remain
+future work. Do not share a GM-scoped server/database with players.
 
-## Execution and failure behavior in the rehearsal
+All three creation environment settings must be supplied together:
+`KANKA_CREATION_DATABASE` (absolute private file), `KANKA_WRITE_CAMPAIGN_IDS`, and
+`KANKA_WRITE_OPERATIONS`. Operation classes are `character.create`,
+`relation.create`, `inventory.add`, `post.create`. Write campaigns must fit the
+configured read allowlist. No database opens or extra tools register by default.
+Incomplete or invalid configuration fails startup. See [README](../README.md)
+for complete commands.
 
-Both HTTP clients always use `httpx.MockTransport`. There is no token loading or
-live transport option. Runs are serialized within a rehearsal instance. It
-creates the approved character, relation, inventory entry and two posts, then
-compares aggregate read-back to the draft. The progress journal skips confirmed
-steps on a same-instance retry. Literal placeholder text in descriptions/posts
-is preserved; only typed owner/item fields and fixed endpoint templates are bound.
+## Privacy and supported fields
+
+The draft supports a character name/HTML description/privacy, outgoing relation
+requests to existing entities, equipped linked inventory, and named HTML posts.
+It also accepts optional text `age`/`sex` and universal `race_entity_ids` and
+`location_entity_ids`. Verified species/location module IDs are used for Kanka's
+`races`/`locations` arrays; reference identity/type changes stop execution. Each
+supplied field is bound into the preview and checked on read-back. Array order
+is not significant; duplicate input references and boolean IDs are rejected.
+Unknown fields, boolean IDs and coerced privacy values fail validation. Character
+privacy defaults to private; relations/posts default to admin visibility.
+Inventory entry privacy is **not configurable** and uses Kanka's default; review
+must show that limitation. Private core records do not prove private inventory.
+
+The backend resolves only typed identity fields in fixed endpoint templates;
+lore containing placeholder-like text remains unchanged. Scope covers the entire
+proposal, including attachments. It does not create dependency records or expose
+arbitrary generic mutations, edits, transfers, deletion or image uploads.
+
+The user explicitly asked to ignore the observed mirroring despite
+`two_way: false`. Do not treat it as a blocker or claim a live one-way guarantee.
+Verification does not require that request-only field to be echoed in responses.
+Inventory amounts accept equivalent numeric API representations; all other
+approved fields are compared strictly. Collections are compared as multisets,
+without relying on API ordering, and actual attachment IDs must match recorded IDs.
+
+## Execution, progress and recovery
+
+`CreationService` owns a separate HTTPX POST client; `KankaClient` remains GET-only.
+It rechecks reviewed reference identities and duplicate names before creating the
+core record. Requests use the actual `/profile` quota for pacing, including POSTs,
+with local request/time budgets independent of account subscription tiers.
+
+`CreationJournal` commits resolved method/path/body intent **before** a send. It
+stores the request fingerprint, campaign, reviewer/approval reference and confirmed
+result IDs, never API/bearer tokens or raw upstream error bodies. The current
+attempt per step is retained; there is no complete append-only audit history,
+migration framework or retention policy yet. New files use mode 0600; insecure
+existing files and symlinks are rejected. Use a private existing parent directory
+outside Git. Stored proposals and requests may contain confidential lore.
 
 | Outcome | Behavior |
 | --- | --- |
-| Confirmed success | Record the step and continue; compare final read-back |
-| Known HTTP rejection | Report completed steps; a new proposal/grant is required to resume |
-| Scope/approval becomes invalid | Stop before the next POST and report confirmed progress |
-| Partial-run retry | Re-read completed data first; changed or unavailable data blocks continuation |
-| Timeout, lost/malformed success response, cancellation during send, unexpected redirect or ambiguous HTTP failure | Mark the step uncertain and block blind retry, even with new approval |
-| Verification failure | Report the mismatch; do not claim success or delete records |
+| Confirmed success response | Validate positive universal/module/owner IDs, commit them, continue |
+| Known HTTP rejection | Preserve progress, stop; require fresh approval before resuming |
+| Scope, approval or reviewed identities change | Stop before the next send |
+| Restart or partial-run continuation | Re-read completed fields and exact IDs; mismatches/incomplete reads block further sends |
+| Timeout, lost/malformed response, cancellation during send, redirect or ambiguous HTTP failure | Preserve uncertain intent; prohibit approval and blind retry |
+| Final read-back mismatch/unavailable data | Report incomplete/partial result and retained IDs; never claim verified success |
+| Verified read-back | Mark proposal complete; consumed approval remains unusable |
 
-Audit output includes proposal ID, content checksum and reviewer. It contains no
-grant token. Discarding the rehearsal discards its synthetic campaign and default
-in-memory journal. An explicitly supplied durable journal remains on disk;
-there are no cleanup or rollback HTTP requests.
+Execution is serialized within a service; SQLite intent/claim checks also reject
+competing sends of the same step across connections. No upstream idempotency key,
+transaction, rollback or version lock is claimed. Identity rechecks cannot prevent
+another Kanka client changing records between reads and writes. Revocation/expiry
+stop later sends, but cannot retract a request already in flight.
 
-## Durable progress and explicit reconciliation
+`get_creation_status` checks campaign scope and returns local state, step outcomes,
+known IDs and approval expiry without executing requests. A `claimed` proposal
+with no uncertain step is still consumed and needs fresh approval after failure.
+Inspect both proposal and step states; an expiry timestamp matters even if the
+stored proposal label still says approved.
 
-The [synthetic acceptance workflow](synthetic-creation-validation.md) now has
-focused SDK dispatch and actual stdio coverage against freshly created mock state.
-The user separately accepted the manual live example and deleted its records.
-The campaign-specific live script is not retained as a product feature. Test
-servers remain under `tests/`, outside the installed package; they expose only
-the existing eight read tools. Retire obsolete demonstration scaffolding for the
-final release while preserving automated regression coverage.
+For uncertain outcomes, the local `reconcile` command:
 
-`loremaster.progress.CreationJournal` uses standard-library SQLite. Nothing opens
-a database by default. Python rehearsal callers must explicitly provide both a
-private journal and an execution ID:
+1. Requires matching write configuration and a token for scoped GET-only reads.
+2. Inspects an explicitly selected candidate: universal entity ID for a character,
+   attachment record ID for relation/inventory/post. Missing, inaccessible,
+   incomplete, ambiguous or mismatching evidence fails closed.
+3. Displays the matching record and request fingerprint. The local reviewer must
+   stop creation workers and verify the record's origin, then type the exact
+   displayed reconciliation phrase. Content equality alone does not prove origin.
+4. Records evidence against the current pending fingerprint. It sends no POST,
+   issues no approval and does not resume. Fresh local approval is required.
 
-```python
-store = CreationJournal(private_path)  # Existing private parent, outside Git.
-rehearsal = OfflineCreation(progress_store=store, execution_id="session-test-1")
-```
+A search finding no record never makes an unknown request safe to resend. Keep
+uncertainty unresolved if origin cannot be established. There is no automatic
+cleanup or deletion; reports preserve confirmed progress for user decisions.
 
-The caller closes both the rehearsal and `store`. The CLI remains a disposable
-in-memory example. Restart tests preserve the simulated upstream campaign while
-reopening the executor; the journal does not persist a fake campaign or revive
-an expired/consumed approval.
+## Offline rehearsal and validation evidence
 
-- The execution ID identifies the logical request independently of its content
-  checksum. Bindings include campaign, digest and resolved universal/module item
-  references. A changed draft/reference cannot reuse the execution ID.
-- Each step records the exact resolved POST fingerprint, request body, reviewer
-  and approval reference. Intent commits **before** sending. Atomic intent checks
-  reject competing sends of the same step.
-- Confirmed results retain record/universal/owner IDs. These are response
-  identities, not a claim that final lore verification already passed. Every
-  resume re-reads completed fields **and IDs**, and final read-back is still required.
-- An interrupted intent or uncertain response blocks sends after restart. Known
-  rejections may resume with a fresh grant; approvals themselves remain process-local.
-- `await rehearsal.reconcile(candidate_id)` inspects an explicit candidate using
-  GETs and returns evidence without changing progress. Character candidates use
-  universal IDs; attachments use their own record IDs. Missing, mismatched,
-  inaccessible or incomplete evidence never clears uncertainty.
-- After the trusted host has stopped other workers and verified the candidate's
-  origin, it may call `reconcile(candidate_id, reviewed_by=...)` to record the
-  matching evidence. Matching content alone does not prove origin. This operation
-  issues no grant and sends no POST; resuming still requires fresh approval.
+The independent `scripts/offline_creation.py` retains the process-local
+`ApprovalGate` and mandatory `httpx.MockTransport` on both clients. It cannot load
+an API token or choose a live transport. Its CLI `--approve CONTENT_DIGEST` is a
+trusted adapter for that fixed synthetic example, not a production approval API.
+Process-local grants are opaque, single-use, expiring and revocable; restarting
+the rehearsal does not restore them. Optional durable progress uses the shared
+journal and a stable explicit execution ID.
 
-New journal files use mode 0600; insecure existing files and symlinks are rejected.
-Bodies can contain private lore, so keep the file and its directory outside the
-public repository. Bearer/approval tokens and raw upstream error bodies are not
-stored. The store retains the current attempt per step, not a complete append-only
-audit history. No migration or production journal retention policy is provided yet.
+The [frozen synthetic scenario](synthetic-creation-validation.md) still checks a
+character description, mentor relation, equipped compass inventory and two posts.
+`tests/test_creation_server.py` retains independent field comparisons through the
+eight read tools. `tests/test_supervised_execution.py` tests the new proposal,
+approval, execution and failure/reconciliation behavior with MockTransport.
+`tests/test_supervised_stdio.py` launches the normal opt-in stdio entry point and
+a separate approval CLI process with a real terminal, proving that storage and
+approval cross process boundaries without enabling a model-callable approver.
+Default server, scope, privacy, expiry, cancellation, malformed responses, replay,
+uncertainty and cleanup retain regression coverage.
 
-This is tested offline recovery, not production authorization, automatic
-reconciliation or distributed transaction support. A host must authenticate
-reviewers, stop workers during reconciliation and protect local storage. Approval
-does not freeze referenced records; read-before-write checks cannot eliminate
-upstream races. Unknown outcomes never become safe retries merely because a
-search found nothing.
+The earlier manual public synthetic run was accepted by the user, who reported
+deleting that first batch. A later separately authorized live fixture check used
+direct creation plus normal stdio read-back and durable journal reopening. That
+is historical evidence for the fixture/read contracts, not live verification of
+this new MCP writer. Neither campaign-specific helper nor live IDs/payloads are
+retained in this public project. Development-only fixtures are excluded from the
+installed wheel; retire obsolete one-off scaffolding before release while keeping
+useful automated regression coverage.
 
-Before enabling any real execution, verify the actual write-response and
-inventory-visibility contracts, obtain separate write consent, select an explicit
-disposable campaign, connect an authenticated approval surface, and test the same
-description/relation/inventory/two-post scenario. Cleanup must be explicitly
-scoped. Image uploads, deletion, canon overwrites and automatic modes are later
-capabilities requiring their own authorization and verification.
+After review of draft PR #3, the user separately authorized a public live run of
+the new executor with an expanded biography, age, sex, species and residence.
+Two synthetic fixture dependencies were seeded separately. The normal opt-in
+stdio server then completed five journaled creation steps after exact local
+review/approval under that user authorization. Independent field/attachment
+checks, status, approval replay denial, journal reopening and shutdown passed.
+This local host approval is not evidence of independent human authentication.
+
+The first preflight was rate-limited before any character POST; after cooldown,
+fresh approval continued the same immutable proposal. Extra independent reads
+also completed after cooldown. Quota is shared with other callers; pacing does
+not reserve it. No uncertain POST was retried. All test records remain for user
+inspection, with no deletion authorization. Only token-free pass/fail evidence
+belongs in public documentation; live IDs, biography and campaign payloads stay
+in the private local report.
+
+A new live execution test needs explicit campaign/operation consent and review of
+the exact proposed fields/privacy. Cleanup is separately scoped. Image upload,
+automatic modes, canon overwrites and broader entity workflows remain later work.

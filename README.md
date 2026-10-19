@@ -1,16 +1,19 @@
 # Kanka LoreMaster
 
-A read-only Python MCP server for campaign lore hosted on Kanka. It discovers
+A Python MCP server for campaign lore hosted on Kanka. It discovers
 campaigns, resolves entity identities, reads descriptions and posts, and retrieves
 inventory and explicit relationships. A full-entity tool combines supported direct
 attachments with per-section provenance. Python 3.13 or newer is required.
 
-The current MVP uses local **stdio** transport. All Kanka requests are GETs;
-there are no creation, editing, transfer, or deletion tools.
+The current MVP uses local **stdio** transport. It is read-only by default.
+Optional supervised character creation requires explicit local configuration and
+a separate terminal approval. Editing, transfers and deletion are not supported.
 
 ## Install
 
-Install the merged read-only MVP from `main`:
+Install from `main` for the merged baseline. The opt-in execution feature is
+being developed on `feat/supervised-write-execution`; check out that branch before
+installation to evaluate it:
 
 ```bash
 git clone https://github.com/Dfupa/kanka-mcp-loremaster.git
@@ -189,10 +192,14 @@ and as JSON text. This synthetic example represents an empty, complete inventory
 - `missing_data` contains endpoint/reason pairs: `unavailable` for inaccessible or
   deleted links, `lookup_limit` for bounded enrichment, `unsupported_module`,
   `missing_item_name`, or `pagination_unavailable`.
-- API and runtime input failures return `data: null`, `complete: false`, a
+- Read API and runtime input failures return `data: null`, `complete: false`, a
   sanitized `error` object (`code`, `message`, `status_code`), and MCP
   `isError: true`. Invalid tool arguments and unknown tool names are rejected by
   the SDK before execution and may have only the SDK's error content.
+
+Creation failures preserve available progress under `data` and still set
+`complete: false`, `error` and MCP `isError: true`. After a timeout, consult
+`get_creation_status` for durable intent/results.
 
 Current Kanka search responses have no pagination metadata. Their candidates are
 returned with `complete: false` and `pagination_unavailable`; an empty search
@@ -241,67 +248,116 @@ development branch. GitHub requires its workflow file to exist on the default
 branch before dispatch is available. Normal CI never uses a Kanka token or makes
 live campaign requests.
 
+## Optional supervised creation
+
+This feature is opt-in. Offline validation uses mocked HTTP, a real stdio server
+and separate approval process. A separately authorized public synthetic live run
+also passed through the normal executor and local approval command, including
+profile fields, attachments, independent read-back and durable status. This does
+not establish behavior for every account or permission set. Leave these variables
+unset for the normal eight read-only tools.
+
+Select an existing private directory outside Git, replace the sample paths/IDs,
+and explicitly configure all three settings in the server's environment:
+
+```bash
+export KANKA_CREATION_DATABASE='/absolute/private/directory/creation.sqlite3'
+export KANKA_WRITE_CAMPAIGN_IDS='123'
+export KANKA_WRITE_OPERATIONS='character.create,relation.create,inventory.add,post.create'
+```
+
+Partial configuration fails startup. The directory must exist; new database files
+use mode 0600. Existing insecure files and symlinks are rejected. Write campaigns
+must be within `KANKA_ALLOWED_CAMPAIGN_IDS` when that read allowlist is configured.
+Narrow the operation list to what you actually permit. Kanka permissions still
+apply; no subscription tiers are hardcoded.
+
+Three tools are added:
+
+| Tool | Behavior |
+| --- | --- |
+| `prepare_character_creation` | Accept campaign, name, HTML `entry`, privacy and optional relation/inventory/post lists; resolve references and store an immutable preview without POSTs |
+| `execute_character_creation` | Consume an existing local approval for `campaign_id` and `proposal_id`; execute only the stored draft and verify read-back |
+| `get_creation_status` | Return scoped local status, confirmed IDs and per-step outcomes without sending writes |
+
+Relation `target_id` and inventory `item_entity_id` are universal IDs of existing
+entities; item module IDs are resolved by the backend. Character privacy defaults
+to private, relations/posts to admin visibility. **Inventory entry privacy uses
+Kanka's default and is not configurable in this slice.** Review those consequences
+before approving. This narrow workflow does not create the referenced mentor/item.
+
+Optional `age` and `sex` are text fields. `race_entity_ids` (species) and
+`location_entity_ids` accept lists of universal entity IDs. The backend verifies
+their module types and resolves the module IDs for Kanka's `races` and `locations`
+arrays. These fields participate in review, durable intent and read-back checks;
+they are not free-form relationships or description-only mentions. See the
+[character API contract](https://app.kanka.io/api-docs/1.0/characters).
+
+After preparing a proposal, review it through the separate local command:
+
+```bash
+kanka-loremaster-approve --database /absolute/private/directory/creation.sqlite3 review PROPOSAL_ID
+kanka-loremaster-approve --database /absolute/private/directory/creation.sqlite3 approve PROPOSAL_ID
+```
+
+Approval displays the stored fields/references/progress and requires an
+interactive terminal plus the exact displayed proposal/digest phrase. These two
+commands need no API token. Approval lasts five minutes from local confirmation,
+is single-use, and is checked again before each POST. Then call
+`execute_character_creation` through MCP. Neither chat confirmation nor a checksum
+can issue approval; no approval command is registered as an MCP tool.
+
+**Trust boundary:** access to this private local file authorizes the host command.
+The reviewer name records the OS user, not a remote login. Anyone, including an
+agent, with equivalent local shell/file access must be trusted. This workflow is
+for a trusted local host; it provides no multi-user authentication.
+
+On failure or timeout, inspect status before taking action. Known rejections may
+resume after a fresh local approval, with completed fields and IDs re-read first.
+Lost responses/interrupted sends remain uncertain and block approval and retry.
+For a record whose origin you have verified, stop all creation workers and use:
+
+```bash
+kanka-loremaster-approve --database /absolute/private/directory/creation.sqlite3 reconcile PROPOSAL_ID --candidate-id RECORD_ID
+```
+
+Reconciliation uses GETs with the matching server configuration/token, displays
+matching evidence and requires an exact confirmation. For a character the candidate
+is its universal entity ID; for an attachment it is that attachment's record ID.
+Matching fields alone cannot prove origin, and absence never authorizes a retry.
+Reconciliation sends no POST and requires fresh approval afterward. To stop
+subsequent sends, use the same command with `revoke PROPOSAL_ID`; already sent
+requests cannot be cancelled or rolled back. Keep the database: it contains
+potentially private lore and the IDs needed for recovery.
+
+See [the supervised-creation contract](docs/supervised-creation.md) for lifecycle,
+verification and remaining limitations. A completed report means the requested
+fields and recorded IDs were read back; it does not claim atomic transactions or
+frozen upstream state.
+
 ### Offline creation rehearsal
 
-The MCP server remains read-only. A separate, network-isolated script rehearses
-creating one synthetic character with a description, an outgoing relation to an
-existing synthetic entity, equipped inventory linked to a synthetic item, and
-two private test posts. Review its ordered request preview:
+The independent script remains network-isolated and never reads an API token:
 
 ```bash
 python scripts/offline_creation.py
-```
-
-Copy the returned `content_digest`, then run:
-
-```bash
 python scripts/offline_creation.py --approve YOUR_PREVIEW_DIGEST
 ```
 
-Both HTTP clients use an in-memory `httpx.MockTransport`; the script has no live
-transport option and never reads an API token. The CLI acts as the trusted
-reviewer: it validates the reviewed checksum, obtains a backend-issued grant and
-claims the server-stored draft. It then resolves universal versus module IDs,
-executes five mocked POSTs, and reads back through `get_entity_full` to compare
-stored fields to the draft. Exiting discards synthetic data; no cleanup writes occur.
+Review the first command's returned `content_digest` before the second. The CLI
+acts as the trusted offline reviewer and issues a process-local grant. Both HTTP
+clients require `httpx.MockTransport`. The frozen scenario creates a synthetic
+character description, relation, equipped linked inventory and two posts with
+five mocked POSTs, followed by aggregate read-back. Exiting discards the simulated
+campaign; no cleanup writes occur. Optional SQLite progress/reconciliation is also
+covered by the offline tests.
 
-The shared `loremaster.creation` module separates a content checksum from an
-execution capability. Its `ApprovalGate` denies campaigns and operation classes
-unless explicitly permitted. Grants are random, bound to a stored proposal,
-single-use, revocable and valid only until the proposal's deadline (five minutes
-by default). Current scope and expiry are checked at approval, claim and before
-each simulated POST. A preview never contains an execution token. The module has
-no network executor and its approval methods are not exposed through MCP.
-
-Python callers must migrate from `run(draft, approval_digest)` to
-`prepare(draft)` → trusted-host `gate.approve(...)` → `run(grant)`. Approval audit
-metadata identifies the proposal, content checksum and reviewer. The host must
-authenticate that reviewer; an `approved_by` string is audit data, not login.
-
-Tests exercise invalid drafts/references, duplicate names, rejected writes,
-partial completion, concurrent claims, expiry, revocation, scope changes and
-same-instance retries without duplicates. Resuming a rejected step requires a
-new proposal/grant and verifies completed data before further writes. Changed
-completed data, lost/malformed responses, cancellation during send, unexpected
-redirects and ambiguous HTTP failures block continuation pending reconciliation.
-By default the progress journal exists only within a rehearsal instance. Python
-callers can explicitly supply a private `CreationJournal` and stable execution ID
-to rehearse recovery across executor restarts. Intent is committed before each
-send; confirmed IDs are restored, while uncertain steps remain blocked until
-reviewed reconciliation. These are offline recovery checks, not production
-authorization or evidence of a deployed write service.
-Inventory visibility parameters require live contract verification before a
-real adapter is implemented (the API docs contain a misspelled parameter).
-See [the supervised-creation contract](docs/supervised-creation.md) for the trust
-boundary and remaining recovery work.
-The [synthetic acceptance workflow](docs/synthetic-creation-validation.md) is now
-covered by SDK dispatch and a real stdio MCP session reading the created fixture.
-Run `pytest -q -rP tests/test_creation_server.py` to see the synthetic
-expected/observed report. Tests also cover restart recovery and explicit
-reconciliation in `tests/test_progress.py`. Test servers are development-only,
-excluded from the installed package; no permanent synthetic MCP tools are added.
-The user's separate manual creation check was accepted and its records removed
-by the user. That one-off live script is not included in this project.
+The [synthetic acceptance workflow](docs/synthetic-creation-validation.md) retains
+its separate read-server report. Run `pytest -q -rP tests/test_creation_server.py`
+for expected/observed fields. New opt-in execution and cross-process approval
+coverage lives in `tests/test_supervised_execution.py`, `tests/test_local_approvals.py`
+and `tests/test_supervised_stdio.py`. Test fixtures are excluded from the installed
+package. Campaign-specific one-off live helpers are not release files.
 
 ## Limits and next milestones
 
@@ -314,7 +370,7 @@ by the user. That one-off live script is not included in this project.
   rejects more than 20 candidates; narrow the query or use the name resolver.
 - Each GET has a 15-second timeout. HTTP 429 receives at most two backoff retries;
   `Retry-After` supports both seconds and HTTP dates. Delays over 30 seconds are
-  reported to the caller for a later retry. Each MCP read has a 120-second total
+  reported to the caller for a later retry. Each MCP operation has a 120-second total
   time budget. There is no persistent cache or local name-to-ID dictionary.
 - Tool JSON payloads above 256 KiB return `result_too_large` rather than being
   silently truncated. Large articles may exceed this MVP limit.
@@ -323,7 +379,7 @@ by the user. That one-off live script is not included in this project.
   is not provided.
 - Unknown custom modules return generic metadata with an explicit missing-details
   marker. Calendar rules, chronology, canon proposals, session-note
-  processing, remote hosting and mutation governance remain later milestones.
+  processing, remote hosting and broader mutation governance remain later milestones.
 - The installed SDK stdio connection has been verified. Individual desktop-client
   setup and UI behavior require checking in the chosen host.
 

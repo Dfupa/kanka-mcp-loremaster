@@ -16,20 +16,17 @@ The system must know the difference between **reading established lore** and
   (note this exact spelling; not `kanka-loremaster-mcp`).
 - **Owner:** `Dfupa`; **license:** MIT; **repository visibility:** PUBLIC.
 - **Default branch:** `main`.
-- **Active development branch:** `feat/supervised-creation`, created from merged
-  `origin/main` at `4f2524c9768a5681f704e1658500dbf7e66dd7f1`.
-- **Completed review:** https://github.com/Dfupa/kanka-mcp-loremaster/pull/1
-  was reviewed and merged by the user; the old remote development branch was
-  deleted. Do not recreate it or add work to that completed PR.
-- The current slice is the shared proposal/approval contract and offline
-  supervised-creation verification. Keep the next PR focused and in draft for
-  review; merging and live write authorization remain separate decisions.
-- **Current checkpoint:** the user accepted the manual synthetic creation check
-  and reported deleting the test entities. Automated SDK/stdio acceptance checks
-  now exercise the created state. Continue the durable offline progress and
-  explicit reconciliation slice; consult `docs/supervised-creation.md` and
-  `docs/synthetic-creation-validation.md`. Keep test fixtures outside the release
-  package and never expose permanent synthetic test tools in the MCP server.
+- **Active development branch:** `feat/supervised-write-execution`, created from
+  merged `origin/main` at `3ee4f916414f42e8ed5fa5e49fff7a0330322b3a`.
+- **Completed reviews:** PR #1 and
+  https://github.com/Dfupa/kanka-mcp-loremaster/pull/2 were merged by the user;
+  their remote branches were deleted. Do not recreate them or add work to them.
+- **Current slice:** opt-in MCP character proposals/execution, a separate trusted
+  local approval command, and durable status/reconciliation. Keep the PR in draft
+  for review; merging and authorizing new live tests remain separate decisions.
+- Preserve the user's untracked `codex_kanka_loremaster_AGENTS.md` unchanged.
+  Test fixtures stay outside the release package; do not add synthetic MCP tools
+  or retain campaign-specific one-off helpers in the product.
 - Continue from the latest remote branch, not an earlier chat-generated ZIP.
 - `README.md` now documents the verified implementation, setup and limitations.
   Keep it accurate as functionality and branch setup change.
@@ -43,9 +40,12 @@ The system must know the difference between **reading established lore** and
 branch are allowed. The user's authorization for Kanka has been **READ-ONLY**.
 There is no standing authorization to create, modify, delete, transform, or
 otherwise persist anything in any Kanka campaign.
-Offline creation rehearsals and development of their validated proposals are
-authorized. PR acceptance and the next branch plan do **not** authorize live
-Kanka writes, image uploads, or exposure of mutation MCP tools.
+Offline rehearsals and development of the opt-in supervised creation adapter
+are authorized by the user's accepted next-branch plan. The normal server remains
+read-only. Enabling its optional creation tools requires explicit local database,
+campaign and operation configuration; execution also requires separate local
+review/approval. This development authorization does **not** permit new live Kanka
+writes, deletion, image uploads, automatic modes or unrestricted mutation tools.
 
 ## 2. Engineering philosophy: Ponytail (full mode)
 
@@ -95,93 +95,78 @@ Run the commands in this order and examine the final CI run for the exact commit
 Do not equate a Ruff formatting failure with a failing test suite: GitHub's
 workflow stops before `pytest` when its earlier steps fail.
 
-## 3. Verified implementation and merge handoff (2026-10-19)
+## 3. Verified implementation and current development (2026-10-19)
 
-Read the current remote state again at the start: this is a snapshot, not a
-claim that files or CI results will remain unchanged.
+Read current Git/remote state at session start; this is a handoff snapshot.
 
-- **Verified implementation baseline:**
-  `d25e116b133f2a4174e76520657c81109793ee4d`
-  (`feat: aggregate entity lore and rehearse creation offline`). This handoff is
-  a documentation follow-up; inspect CI for its eventual exact commit separately.
-- **Baseline CI is GREEN:**
-  https://github.com/Dfupa/kanka-mcp-loremaster/actions/runs/39260169288
-  completed successfully for that exact implementation commit. Ruff lint and
-  format checks passed; **250 tests passed in CI** and locally. Earlier Ruff/CI
-  failures and the old inconclusive identity lookup have been resolved.
-- `src/loremaster/kanka.py`: asynchronous GET-only HTTPX client, campaign
-  allowlists, scoped identity checks, pagination, bounded 429 backoff, and
-  inventory/relation enrichment. Universal and module IDs remain distinct.
-- `src/loremaster/aggregate.py`: `get_entity_full` composes verified generic and
-  module fields plus eleven supported direct attachment sections: `posts`,
-  `inventory`, `relations`, `attributes`, `reminders`, `assets`, `abilities`,
-  `tags`, `mentions`, `permissions`, and `images`. It supports section selection,
-  independent source/status/completeness, and stateless page continuation.
-- `src/loremaster/server.py`: **eight read-only FastMCP tools**:
-  `list_campaigns`, `find_entities_by_name`, `search_entities`, `get_entity`,
-  `get_entity_full`, `get_entity_posts`, `get_entity_inventory`,
-  `get_entity_relations`. `src/loremaster/results.py` defines their shared result
-  envelope. All tools have read-only annotations and structured error handling.
-- **Live read-only evidence:** actual SDK stdio client/server checks verified
-  Marcian's identity/description, Roderick's inventory, Elgith's explicit
-  relations, search and posts. A separate full-entity stdio check retrieved all
-  eleven sections for one authorized entity; nine sections completed, while
-  attributes and permissions lacked pagination metadata and were correctly
-  marked incomplete. Account quota discovery and shutdown passed. This is not
-  evidence for every account, campaign, record or permission combination.
-- `scripts/offline_creation.py`: a **network-isolated rehearsal**, not a live
-  writer. It validates immutable synthetic proposals, previews ordered requests,
-  binds approval to a digest, resolves references, simulates a character with
-  description, outgoing relation, equipped linked inventory and exactly two
-  private posts, and compares read-back through the aggregate to the proposal.
-  Both HTTP clients require in-memory `MockTransport`; there is no live transport
-  option or token/environment loading. The CLI preview and approved execution
-  passed. Tests cover rejected steps, partial progress, same-instance retries
-  without duplicates, uncertain outcomes and content mismatches.
-- The baseline rehearsal journal was **in memory only**. Timeouts/5xx block blind retry
-  pending reconciliation. Durable idempotency, production approval enforcement,
-  transaction guarantees, live creation/editing/deletion and uploads are not
-  implemented or verified at that baseline. See the one-off exception below.
-- Tests include synthetic API boundary cases and an actual subprocess SDK stdio
-  session dispatching all eight tools, output schemas, errors, recovery and
-  cleanup. `.github/workflows/tests.yml` runs offline checks without credentials.
-- `scripts/verify_mcp.py` is the safe GET-only stdio smoke check. Its aggregate
-  demonstration requests posts only; it does not reproduce the separate full
-  eleven-section live inspection. `scripts/verify_character_lookup.py` remains
-  a safe direct-client identity verifier.
-- `.github/workflows/verify-character-lookup.yml` is now **manual dispatch only**,
-  uses `scripts/verify_mcp.py`, and is restricted to the repository and
-  `feat/supervised-creation`. Its branch guard was updated from the retired
-  branch in this slice. Do not remove secret protections or add live checks to
-  untrusted PRs.
-  GitHub dispatch also requires the workflow to exist on the default branch.
-- GitHub Actions secret `KANKA_API_TOKEN` was configured earlier by the user;
-  its current presence/value is not verified by these offline jobs. Check only
-  inside an authorized runner when needed, and never expose it.
-- `scripts/private_kanka_check.py` remains a **legacy experimental script**,
-  retained and unused. Never execute it automatically or treat it as the
-  canonical client/verifier. Do not commit credentials or live campaign dumps.
-- Local stdio is verified; a selected desktop host's configuration/UI, remote
-  hosting, multi-user authentication and separate GM/player isolation are not.
+- **Merged baseline:** PR #2's feature tip
+  `b16d85c5469e6f0dd0e7d6d88693be91f8def000`; main merge `3ee4f91`.
+  Baseline CI was green with **342 tests**:
+  https://github.com/Dfupa/kanka-mcp-loremaster/actions/runs/39278430298.
+  This is historical evidence, not the CI result for subsequent changes.
+- `kanka.py` remains a GET-only HTTPX reader with campaign scope, verified
+  universal/module IDs, pagination, bounded 429 backoff and enrichment.
+- `aggregate.py` combines core/module fields and eleven direct sections:
+  posts, inventory, relations, attributes, reminders, assets, abilities, tags,
+  mentions, permissions and images. Preserve provenance and incompleteness.
+- The default server exposes **eight read-only tools**. Live stdio checks have
+  verified the three canonical character demonstrations and a full-entity read
+  for one authorized record. Nine sections completed; attributes and permissions
+  lacked pagination metadata and were correctly marked incomplete. Do not extend
+  this evidence to every campaign/account/record.
+- `creation.py` retains immutable drafts, previews, scope checks and the
+  process-local `ApprovalGate` for network-isolated rehearsals. A digest is a
+  checksum, never authorization. `progress.py` supplies optional private SQLite
+  intent/results, restart recovery and reviewed reconciliation. Intent commits
+  before sends; uncertain outcomes never permit blind retry.
+- **Scoped adapter:** `approvals.py` stores immutable proposals and
+  expiring, atomic single-use local approvals in the same private SQLite file.
+  `approve.py` is a separate terminal command; it cannot be called through MCP.
+  Local OS file access is the trust boundary. This does not authenticate remote
+  users or protect against an administrator/agent with the same filesystem access.
+- `execution.py` is a separate narrow POST writer. Explicit campaign/operation
+  scope, local approval, identity rechecks, durable intent, per-send guards and
+  final field/ID read-back are required. It does not edit/delete, roll back,
+  automatically reconcile or retry unknown outcomes. Approval is refused while
+  intent is uncertain; reconciliation must precede fresh approval.
+- The server registers three extra tools only when all creation settings are
+  provided: `prepare_character_creation`, `execute_character_creation`,
+  `get_creation_status`. There is no approve/revoke/reconcile mutation tool.
+  No database is opened in default read-only mode. See README for configuration
+  and `docs/supervised-creation.md` for trust, privacy and recovery limitations.
+- New coverage includes actual SDK stdio sessions with a separate interactive
+  approval subprocess and shared SQLite storage, mandatory mock HTTP, expiry,
+  revocation, cancellation, malformed responses and all four reconciliation
+  classes. A passing mock workflow is **not** a live test of this new adapter.
+- `scripts/offline_creation.py` remains forcibly isolated with MockTransport and
+  no token loading. `verification.py` shares strict field/ID read-back checks;
+  numeric inventory quantities are accepted, API collection order is not assumed,
+  and request-only `two_way` is not a live one-way guarantee.
+- `.github/workflows/tests.yml` runs offline checks without credentials. The live
+  verification workflow remains manually dispatched, GET-only, repository scoped
+  and guarded to `feat/supervised-write-execution`. Do not remove secret protections.
+- `scripts/private_kanka_check.py` is legacy, retained and unused; never run it
+  automatically. No credentials, campaign dumps or live test IDs belong in Git.
+- Desktop-host UI, remote hosting, multi-user authentication, inventory per-entry
+  privacy configuration, upstream transactions, append-only audit retention and
+  database migrations remain unverified/unimplemented as applicable.
 
-**Active slice after PR #1:** `src/loremaster/creation.py` now owns the reusable
-drafts, previews, campaign/operation scope and process-local approval gate. A
-preview's `content_digest` is a checksum, not permission to execute. Only a trusted
-host may issue an opaque grant through `approve`; these methods are not MCP
-tools or an authenticated user interface. Grants are expiring, revocable and
-single-use, and the rehearsal checks current scope before each simulated POST.
-The CLI is the trusted caller in the network-isolated demonstration. Known
-rejections require a fresh grant to resume, and completed data is checked before
-continuation. Read `docs/supervised-creation.md` for the trust/recovery contract.
-
-PR #1's baseline evidence above remains historical. Inspect the current branch's
-exact commit and tests for new changes. The production MCP still has eight
-read-only tools. Durable progress is now available only to explicitly configured
-offline rehearsals through `loremaster.progress.CreationJournal`. It commits
-resolved request intent before sending, restores confirmed IDs across restarts,
-and blocks uncertain steps. Explicit candidate read-back/reviewer confirmation
-can reconcile a step; execution still needs a fresh process-local approval.
-Host authentication and a production write adapter remain unimplemented.
+**Subsequent authorized live acceptance:** the user reviewed draft PR #3 and
+explicitly requested a public synthetic test through the new executor, expanded
+with an HTML biography, text age/sex, species and residence. Optional universal
+`race_entity_ids`/`location_entity_ids` now resolve verified module IDs for Kanka's
+`races`/`locations` arrays and participate in preview, intent and read-back.
+The normal opt-in stdio server and separate local approval command passed the live
+workflow, including five confirmed steps, independent exact field/attachment
+verification, replay denial, journal reopening and shutdown. Two public synthetic
+dependencies were seeded separately; their creation is not an MCP capability.
+An initial GET-only preflight 429 sent no character POST; after cooldown a fresh
+local approval continued the same proposal. Additional read-back completed after
+cooldown. Account pacing cannot reserve quota shared with other clients.
+The local host performed approval under explicit user test authorization; this
+does not prove independent human authentication. Test records remain for user
+inspection; deletion was not requested. No live IDs, payloads or campaign-specific
+helpers are committed. No new standing write permission is implied.
 
 ### Account behavior, completeness and remaining local safeguards
 
@@ -382,18 +367,19 @@ with their originating note/session and retain provenance for reversibility.
 
 ## 6. Writes: explicit governance, never implicit consent
 
-**Current phase:** Kanka READ-ONLY; only HTTP `GET` (or `HEAD` for verified
-endpoints). Do not expose mutation MCP tools or run integration tests against
-real Kanka that write anything until the user specifically authorizes a later
-phase and a safe disposable/test campaign has been selected.
+**Default runtime:** Kanka READ-ONLY. The user accepted developing a narrowly
+scoped opt-in character creation adapter on the current feature branch. Enable it
+only with all three explicit local creation settings and separate terminal
+approval. Do not add unrestricted writes or treat chat assertions as approval.
+No new live integration writes are authorized by this development request.
 
-The accepted offline rehearsal may simulate POSTs only through its mandatory
-`MockTransport`. Keep it isolated from the production GET-only client. Developing
-the next proposal/approval boundary and offline tests does not enable real writes.
-Do not treat a rehearsal approval digest as production authorization or its
-same-instance journal as durable retry protection.
+The accepted offline rehearsal still permits POST simulation only through its
+mandatory MockTransport. The production GET client stays separate from the writer.
+A preview/review digest is not authority. Protect the private SQLite file outside
+Git, and do not describe same-OS file access as remote/human authentication.
 
-**Future user-configurable modes (planned, not active):**
+**Governance modes:** the narrow opt-in supervised workflow is implemented in
+this branch; broader governance and both automatic modes remain planned.
 
 1. `supervised` (**default**): read and verify, prepare a proposal/preview,
    explain consequences, and require explicit approval before committing.
@@ -484,53 +470,43 @@ player persona. Separate suggestions from successful persisted operations.
 - Never enable deletion or automatic canon rewriting as a side effect of
   implementing an apparently read-only feature.
 
-### Next agreed slice — Supervised creation, offline first
+### Current agreed slice — Opt-in supervised write execution
 
-This slice may precede broader canon-aware lorekeeping; implementing every
-calendar/chronology capability is not a prerequisite for the narrow creation test.
+1. Continue on `feat/supervised-write-execution`, based on merged PR #2. Preserve
+   the untracked handoff copy. Keep commits focused and the new PR in draft.
+2. Complete the local proposal → terminal approval → MCP execution → read-back
+   flow and meaningful mocked stdio/recovery tests. Preserve default read-only
+   startup and explicit campaign/operation scope.
+3. Verify dependencies, formatting, lint and all tests in the required order;
+   inspect CI for the exact published commit. Distinguish offline success from
+   historical live evidence and any future separately authorized live test.
+4. Before a new live test, obtain explicit scope and review exact proposals and
+   privacy defaults. Inventory entry visibility currently uses Kanka's default;
+   do not promise private inventory. Do not investigate the observed mirrored
+   relation as a blocker: the user explicitly asked to ignore it.
 
-1. The merge/branch transition is complete. Continue on `feat/supervised-creation`
-   and preserve the user's untracked handoff copy without adding or overwriting it.
-2. Reuse the validated proposal and read-back contracts. Design a backend
-   boundary for explicit approval of exact content, campaign and operation class.
-   Keep real mutation tools/execution disabled under the current authorization.
-3. Extend offline coverage for reference resolution, privacy, duplicate names,
-   stale state, rejected/partially completed steps, durable progress design,
-   uncertain-response reconciliation and verification. Do not blindly retry POSTs
-   or promise atomic transactions without a verified upstream contract.
-4. Use the acceptance scenario already rehearsed: one test character with a
-   description, outgoing relationship, linked inventory and exactly two posts.
-   Verify universal versus module IDs and every approved field after execution.
-   The inventory visibility parameter spelling in Kanka's docs is unresolved;
-   verify its actual contract before implementing a live adapter.
-5. Only after new write authorization and explicit selection of a disposable
-   campaign, implement/enable the scoped live execution path and run that exact
-   reviewed scenario. Scope cleanup explicitly; never add automatic deletion.
-
-Image attachment is later work: documentation provides an entity image-upload
-endpoint and ChatGPT file inputs, but no live upload or generated-image handoff
-has been verified. Images also require separate write authorization. Do not
-promise an automatic ChatGPT-generated-image-to-Kanka path based on metadata reads.
+Image attachment remains later work. Do not promise a generated-image-to-Kanka
+handoff based on metadata reads; uploads need separate authorization and tests.
 
 ## 9. Continuity and response protocol
 
-At the start of a Codex session, inspect `git status`, `git branch -a`, the
-latest commits, the PR, `pyproject.toml`, source, tests and workflow logs.
-Use `feat/supervised-creation`, based on the merged remote `main`; never push
-directly to `main` without an explicit request. Keep commits focused and PRs
-reviewable. Respect uncommitted changes by others, and refresh branch-dependent
-README/workflow instructions deliberately. The live manual workflow's branch
-guard now targets this branch while keeping its repository/secret restrictions.
+At session start inspect `git status`, branches, latest commits, current PR,
+`pyproject.toml`, source, tests and workflow logs. Work on the active feature
+branch; never push directly to `main` without an explicit request. Keep commits
+focused and PRs reviewable. Respect other people's uncommitted changes.
 
-When reporting outcomes in this development chat, answer in **English**, mention
-changed paths/commit/PR, show actual commands and test outcomes, and distinguish
-**offline mocked success**, **GitHub CI green**, and **live Kanka verified**.
-If blocked, give the specific error and a realistic next step; do not claim
-future work has already been carried out.
+This development chat uses **English**. Report changed paths/commit/PR, actual
+verification commands and results. Distinguish **offline mocked success**,
+**GitHub CI green for the exact commit**, and **live Kanka verified**. State any
+remaining limitation or specific blocker; never claim future work is finished.
 
-**Continuation suggestion:** "Read AGENTS.md and docs/supervised-creation.md on
-feat/supervised-creation. Review the durable offline progress/reconciliation and
-development-only SDK/stdio acceptance tests, then design the authenticated host
-approval surface and production executor separately. Inspect current PR/CI. Keep live
-Kanka read-only until new write consent and a disposable campaign are supplied.
-Preserve secrets and existing user files."
+GitHub Actions secret `KANKA_API_TOKEN` was configured earlier; these offline
+checks do not verify its current presence/value. Only inspect it within an
+authorized runner without exposing it. Live workflow dispatch requires its file
+on the default branch; retain repository/branch guards and secret protections.
+
+**Continuation:** read this file and `docs/supervised-creation.md`, inspect the
+current draft PR/CI, and review the opt-in local approval/execution slice.
+Default startup stays read-only. New live writes need separately reviewed scope
+and exact proposals; no automatic cleanup is authorized. Preserve user files and
+keep credentials and live campaign data out of this public repository.
