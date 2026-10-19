@@ -2,141 +2,75 @@
 
 Run without arguments to review a synthetic proposal, then --approve DIGEST to
 execute it against an in-memory HTTPX MockTransport. No token/environment reads,
-real requests, persistence, automatic rollback or deletion are possible here.
-This rehearses sequencing and failure handling, not production authorization.
+real requests, automatic rollback or deletion are possible here. Python callers
+may explicitly supply a private CreationJournal to rehearse restart recovery.
+The CLI is the trusted approval caller for this offline scenario. A content
+checksum is not an execution grant; no model-callable approval tool exists.
 """
 
 import argparse
 import asyncio
-import hashlib
 import json
-from typing import Annotated, Any
+from typing import Any
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
 from loremaster.aggregate import get_entity_full
+from loremaster.creation import (
+    ApprovalGate,
+    ApprovalGrant,
+    CharacterDraft,
+    CreationScope,
+    InventoryDraft,
+    PostDraft,
+    RelationDraft,
+    preview_creation,
+    resolve_creation_request,
+)
 from loremaster.kanka import API_BASE_URL, KankaClient, KankaError
-
-ID = Annotated[int, Field(strict=True, gt=0)]
-Text = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
-
-
-class DraftRecord(BaseModel):
-    """Reject unknown fields and coercions; proposals cannot be edited in place."""
-
-    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
-
-
-class RelationDraft(DraftRecord):
-    """Reference a universal target ID; only outgoing, one-way edges are supported."""
-
-    target_id: ID
-    relation: Annotated[Text, Field(max_length=255)]
-    attitude: Annotated[int, Field(ge=-100, le=100)] = 0
-    visibility_id: Annotated[int, Field(ge=1, le=5)] = 3
-
-
-class InventoryDraft(DraftRecord):
-    """Reference a universal item ID, resolved to its module ID before execution."""
-
-    item_entity_id: ID
-    amount: Annotated[int, Field(gt=0)] = 1
-    is_equipped: bool = False
-    position: str = "Pack"
-
-
-class PostDraft(DraftRecord):
-    """A named post with explicit visibility and source HTML."""
-
-    name: Text
-    entry: Text
-    visibility_id: Annotated[int, Field(ge=1, le=5)] = 3
-
-
-class CharacterDraft(DraftRecord):
-    """The narrow offline acceptance scenario; no edits or deletes are supported."""
-
-    campaign_id: ID
-    name: Text
-    entry: Text
-    is_private: bool = True
-    relations: tuple[RelationDraft, ...] = ()
-    inventory: tuple[InventoryDraft, ...] = ()
-    posts: tuple[PostDraft, ...] = ()
-
-
-def preview_creation(draft: CharacterDraft) -> dict[str, Any]:
-    """Return ordered synthetic requests and a digest binding approval to content."""
-    base = f"campaigns/{draft.campaign_id}"
-    entity = base + "/entities/{entity_id}"
-    operations = [
-        {
-            "key": "character",
-            "method": "POST",
-            "path": base + "/characters",
-            "body": draft.model_dump(include={"name", "entry", "is_private"}),
-        }
-    ]
-    for index, relation in enumerate(draft.relations):
-        operations.append(
-            {
-                "key": f"relation:{index}",
-                "method": "POST",
-                "path": entity + "/relations",
-                "body": {
-                    **relation.model_dump(),
-                    "owner_id": "{entity_id}",
-                    "two_way": False,
-                },
-            }
-        )
-    for index, item in enumerate(draft.inventory):
-        operations.append(
-            {
-                "key": f"inventory:{index}",
-                "method": "POST",
-                "path": entity + "/inventory",
-                "body": {
-                    "entity_id": "{entity_id}",
-                    "item_id": f"{{item_child_id:{item.item_entity_id}}}",
-                    "amount": str(item.amount),
-                    "is_equipped": item.is_equipped,
-                    "position": item.position,
-                },
-            }
-        )
-    for index, post in enumerate(draft.posts):
-        operations.append(
-            {
-                "key": f"post:{index}",
-                "method": "POST",
-                "path": entity + "/posts",
-                "body": {**post.model_dump(), "entity_id": "{entity_id}"},
-            }
-        )
-    proposal = {
-        "mode": "offline_only",
-        "campaign_id": draft.campaign_id,
-        "operations": operations,
-    }
-    digest = hashlib.sha256(
-        json.dumps(proposal, sort_keys=True, ensure_ascii=False).encode()
-    ).hexdigest()
-    return {**proposal, "approval_digest": digest}
+from loremaster.progress import CreationJournal
 
 
 class OfflineCreation:
     """A disposable synthetic campaign whose HTTP transport cannot reach Kanka.
 
-    Successful steps are journaled only within this instance. Known rejections
+    Successful steps are journaled in memory or an explicitly supplied store. Rejections
     may be resumed; timeouts/5xx require reconciliation and are never blindly
     retried. This is not durable idempotency for a production write service.
     """
 
     campaign_id = 7
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        gate: ApprovalGate | None = None,
+        *,
+        progress_store: CreationJournal | None = None,
+        execution_id: str | None = None,
+    ) -> None:
+        if (progress_store is None) != (execution_id is None):
+            raise ValueError("Durable rehearsal requires both a store and execution ID")
+        if progress_store is not None:
+            progress_store.progress(execution_id)
+        self.progress_store = progress_store
+        self.execution_id = execution_id
+        self.gate = (
+            gate
+            if gate is not None
+            else ApprovalGate(
+                CreationScope(
+                    campaign_ids=frozenset({self.campaign_id}),
+                    operations=frozenset(
+                        {
+                            "character.create",
+                            "relation.create",
+                            "inventory.add",
+                            "post.create",
+                        }
+                    ),
+                )
+            )
+        )
         self.records = {
             101: {
                 "id": 11,
@@ -154,6 +88,7 @@ class OfflineCreation:
         self.attachments: dict[int, dict[str, list[dict[str, Any]]]] = {}
         self.journal: dict[str, dict[str, Any]] = {}
         self.requests: list[tuple[str, str]] = []
+        self._execution_lock = asyncio.Lock()
         self.failure: tuple[str, int] | None = None
         self.lose_response: str | None = None
         self._active_key = ""
@@ -253,16 +188,35 @@ class OfflineCreation:
             raise httpx.ReadTimeout("Synthetic lost response", request=request)
         return response(data)
 
-    async def run(self, draft: CharacterDraft, approval_digest: str) -> dict[str, Any]:
-        """Execute only an approved synthetic proposal; retain partial-step outcomes."""
-        # Revalidate even if a caller bypassed Pydantic with model_construct.
+    def prepare(self, draft: CharacterDraft) -> dict[str, Any]:
+        """Prepare a scoped synthetic proposal without approving or executing it."""
         draft = CharacterDraft.model_validate(draft.model_dump())
-        proposal = preview_creation(draft)
         if draft.campaign_id != self.campaign_id:
             raise PermissionError("Only the synthetic campaign is permitted")
-        if approval_digest != proposal["approval_digest"]:
-            raise PermissionError("Approval does not match this proposal")
-        journal = self.journal.setdefault(approval_digest, {})
+        return self.gate.prepare(draft)
+
+    async def run(self, grant: ApprovalGrant) -> dict[str, Any]:
+        """Claim a grant and execute its stored draft through MockTransport only."""
+        async with self._execution_lock:
+            return await self._run(grant)
+
+    async def _run(self, grant: ApprovalGrant) -> dict[str, Any]:
+        """Serialize rehearsal state so concurrent approvals cannot duplicate steps."""
+        approved = self.gate.claim(grant)
+        draft = approved.draft
+        if draft.campaign_id != self.campaign_id:
+            raise PermissionError("Only the synthetic campaign is permitted")
+        proposal = preview_creation(draft)
+        audit = {
+            "proposal_id": approved.proposal_id,
+            "content_digest": approved.content_digest,
+            "approved_by": approved.approved_by,
+        }
+        if self.progress_store is not None:
+            journal = self.progress_store.progress(self.execution_id)
+            self.journal[self.execution_id] = journal
+        else:
+            journal = self.journal.setdefault(approved.content_digest, {})
         if "uncertain" in journal:
             raise RuntimeError(
                 "An uncertain operation requires reconciliation before retry"
@@ -278,6 +232,8 @@ class OfflineCreation:
             if linked["entity"]["entity_type"] != "item":
                 raise ValueError("Inventory references must identify item entities")
             item_ids[item.item_entity_id] = linked["entity"]["child_id"]
+        if self.progress_store is not None:
+            self.progress_store.bind(self.execution_id, approved, item_ids)
         if "character" not in journal:
             matches = await self.reader.find_entities_by_name(
                 draft.campaign_id, draft.name
@@ -286,30 +242,103 @@ class OfflineCreation:
                 raise ValueError(
                     "Character name already exists; resolve the conflict first"
                 )
+        else:
+            current = await get_entity_full(
+                self.reader,
+                draft.campaign_id,
+                journal["character"]["entity_id"],
+                sections=["posts", "inventory", "relations"],
+            )
+            if (
+                current["entity"]["entity_type"] != "character"
+                or current["entity"]["child_id"] != journal["character"]["id"]
+            ):
+                raise KankaError(
+                    "Previously created character changed; reconcile first"
+                )
+            completed = draft.model_copy(
+                update={
+                    section: tuple(
+                        value
+                        for index, value in enumerate(getattr(draft, section))
+                        if f"{prefix}:{index}" in journal
+                    )
+                    for section, prefix in (
+                        ("relations", "relation"),
+                        ("inventory", "inventory"),
+                        ("posts", "post"),
+                    )
+                }
+            )
+            verify_created(completed, current, item_ids)
+            verify_result_ids(journal, current)
 
         for operation in proposal["operations"]:
             key = operation["key"]
             if key in journal:
                 continue
             entity_id = journal.get("character", {}).get("entity_id")
-            path = operation["path"].replace("{entity_id}", str(entity_id))
-            body = {
-                k: entity_id if v == "{entity_id}" else v
-                for k, v in operation["body"].items()
-            }
-            if key.startswith("inventory:"):
-                body["item_id"] = item_ids[
-                    draft.inventory[int(key.split(":")[1])].item_entity_id
-                ]
+            path, body = resolve_creation_request(
+                draft, key, entity_id=entity_id, item_ids=item_ids
+            )
             self._active_key = key
+            intent_started = False
             try:
+                self.gate.check_execution(approved)
+                if self.progress_store is not None:
+                    self.progress_store.begin(
+                        self.execution_id, approved, key, path, body
+                    )
+                    intent_started = True
                 response = await self._writer.post(path, json=body)
-                if response.status_code >= 500:
+                if response.status_code >= 300 and response.status_code not in (
+                    400,
+                    401,
+                    403,
+                    404,
+                    409,
+                    422,
+                    429,
+                ):
                     journal["uncertain"] = key
                 response.raise_for_status()
-            except (httpx.HTTPStatusError, httpx.RequestError) as error:
-                if isinstance(error, httpx.RequestError):
+                created = response.json()["data"]
+                if (
+                    not isinstance(created, dict)
+                    or type(created.get("id")) is not int
+                    or created["id"] <= 0
+                ):
+                    raise ValueError("Invalid synthetic creation response")
+                owner_field = "owner_id" if key.startswith("relation:") else "entity_id"
+                if (
+                    type(created.get(owner_field)) is not int
+                    or created[owner_field] <= 0
+                    or (key != "character" and created[owner_field] != entity_id)
+                ):
+                    raise ValueError("Mismatched synthetic creation response")
+            except asyncio.CancelledError:
+                journal["uncertain"] = key
+                if intent_started:
+                    self.progress_store.finish(self.execution_id, key, "uncertain")
+                raise
+            except (
+                httpx.HTTPStatusError,
+                httpx.RequestError,
+                PermissionError,
+                ValueError,
+                KeyError,
+                TypeError,
+            ) as error:
+                if isinstance(
+                    error, (httpx.RequestError, ValueError, KeyError, TypeError)
+                ):
                     journal["uncertain"] = key
+                if intent_started:
+                    self.progress_store.finish(
+                        self.execution_id,
+                        key,
+                        "uncertain" if "uncertain" in journal else "rejected",
+                    )
                 return {
                     "status": "uncertain"
                     if "uncertain" in journal
@@ -319,18 +348,134 @@ class OfflineCreation:
                     "completed": [step for step in journal if step != "uncertain"],
                     "failed_step": key,
                     "entity_id": entity_id,
-                    "error": "Synthetic operation failed; no automatic rollback",
+                    "approval": audit,
+                    "error_code": "approval_denied"
+                    if isinstance(error, PermissionError)
+                    else "uncertain_result"
+                    if "uncertain" in journal
+                    else "upstream_rejected",
+                    "error": str(error)
+                    if isinstance(error, PermissionError)
+                    else "Synthetic operation failed; no automatic rollback",
                 }
-            journal[key] = response.json()["data"]
+            if self.progress_store is not None:
+                self.progress_store.finish(self.execution_id, key, "confirmed", created)
+            journal[key] = created
         entity_id = journal["character"]["entity_id"]
         bundle = await get_entity_full(self.reader, draft.campaign_id, entity_id)
         verify_created(draft, bundle, item_ids)
+        verify_result_ids(journal, bundle)
         return {
             "status": "verified",
             "completed": list(journal),
             "entity_id": entity_id,
             "bundle": bundle,
+            "approval": audit,
         }
+
+    async def reconcile(
+        self, candidate_id: int, *, reviewed_by: str | None = None
+    ) -> dict[str, Any]:
+        """Inspect an explicitly selected record; optionally record trusted review.
+
+        Use a universal ID for a character candidate, attachment record ID for
+        other steps. Missing/mismatched evidence leaves uncertainty intact. The
+        trusted host must stop other workers and establish the candidate's origin
+        before passing reviewed_by; matching content alone cannot prove origin.
+        No grant is issued and no HTTP mutation occurs. Resume needs fresh approval.
+        """
+        if self.progress_store is None:
+            raise ValueError("Reconciliation requires a durable execution journal")
+        self.reader._check_id(candidate_id, "candidate_id")
+        if reviewed_by is not None and (
+            not isinstance(reviewed_by, str) or not reviewed_by.strip()
+        ):
+            raise ValueError("Reconciliation requires an identified reviewer")
+        async with self._execution_lock:
+            pending = self.progress_store.pending(self.execution_id)
+            if pending["campaign_id"] != self.campaign_id:
+                raise PermissionError("Pending operation belongs to another campaign")
+            key, body = pending["key"], pending["body"]
+            if key == "character":
+                if pending["path"] != f"campaigns/{self.campaign_id}/characters":
+                    raise ValueError("Invalid pending character path")
+                try:
+                    core = await self.reader.get_entity(self.campaign_id, candidate_id)
+                except KankaError as error:
+                    if error.status_code not in (403, 404):
+                        raise
+                    return {"status": "unavailable", "key": key}
+                if core["entity"]["entity_type"] != "character":
+                    return {"status": "mismatch", "key": key}
+                candidates = [core["details"]]
+            else:
+                section = {
+                    "relation": "relations",
+                    "inventory": "inventory",
+                    "post": "posts",
+                }.get(key.split(":")[0])
+                if section is None:
+                    raise ValueError("Unsupported pending operation")
+                owner = body.get("owner_id" if section == "relations" else "entity_id")
+                self.reader._check_id(owner, "owner_id")
+                if (
+                    pending["path"]
+                    != f"campaigns/{self.campaign_id}/entities/{owner}/{section}"
+                ):
+                    raise ValueError("Invalid pending attachment path")
+                bundle = await get_entity_full(
+                    self.reader, self.campaign_id, owner, sections=[section]
+                )
+                if (
+                    bundle["missing_data"]
+                    or not bundle["sections"][section]["complete"]
+                ):
+                    return {"status": "incomplete", "key": key}
+                candidates = [
+                    row
+                    for row in bundle["sections"][section]["data"]
+                    if type(row.get("id")) is int and row["id"] == candidate_id
+                ]
+            if len(candidates) != 1:
+                return {"status": "missing_or_ambiguous", "key": key}
+            candidate = candidates[0]
+            if any(
+                type(candidate.get(field)) is not type(value)
+                or candidate[field] != value
+                for field, value in body.items()
+            ):
+                return {"status": "mismatch", "key": key}
+            result = {
+                "status": "matching_candidate",
+                "key": key,
+                "candidate_id": candidate_id,
+                "fingerprint": pending["fingerprint"],
+                "source": API_BASE_URL + pending["path"],
+            }
+            if reviewed_by is not None:
+                self.progress_store.confirm_reconciled(
+                    self.execution_id,
+                    pending["fingerprint"],
+                    candidate,
+                    reviewed_by=reviewed_by,
+                )
+                result["status"] = "confirmed"
+            return result
+
+
+def verify_result_ids(journal: dict[str, Any], bundle: dict[str, Any]) -> None:
+    """A replaced lookalike attachment must not count as the recorded result."""
+    for section, prefix in (
+        ("relations", "relation:"),
+        ("inventory", "inventory:"),
+        ("posts", "post:"),
+    ):
+        expected = {
+            record["id"] for key, record in journal.items() if key.startswith(prefix)
+        }
+        observed = {record["id"] for record in bundle["sections"][section]["data"]}
+        if expected != observed:
+            raise KankaError(f"Created {section} record IDs changed; reconcile first")
 
 
 def verify_created(
@@ -397,7 +542,9 @@ def example_draft() -> CharacterDraft:
 async def main() -> None:
     """Print a reviewable proposal or execute its explicit digest in memory only."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--approve", help="Exact approval_digest from the preview")
+    parser.add_argument(
+        "--approve", help="Exact content_digest from the reviewed preview"
+    )
     arguments = parser.parse_args()
     draft = example_draft()
     if arguments.approve is None:
@@ -405,7 +552,13 @@ async def main() -> None:
         return
     rehearsal = OfflineCreation()
     try:
-        result = await rehearsal.run(draft, arguments.approve)
+        proposal = rehearsal.prepare(draft)
+        grant = rehearsal.gate.approve(
+            proposal["proposal_id"],
+            reviewed_digest=arguments.approve,
+            approved_by="offline-cli-reviewer",
+        )
+        result = await rehearsal.run(grant)
         print(
             json.dumps(
                 {key: value for key, value in result.items() if key != "bundle"},
