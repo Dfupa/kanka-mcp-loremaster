@@ -190,7 +190,15 @@ Run the extended checks without credentials:
 pytest -q tests/test_organisation_creation.py tests/test_item_creation.py tests/test_supervised_stdio.py
 ```
 
-Passing offline tests does not establish live organization/member/item response
-schemas. The user explicitly deferred live tests; existing authorized character
-results remain historical evidence only. A future live scenario must resolve
-current records again and obtain explicit campaign/operation/content approval.
+Passing offline tests alone does not establish live response schemas. After
+reviewing draft PR #4, the user separately authorized a public synthetic live
+run and recreation of its deleted character dependencies. The normal MCP server
+and separate local approval command completed the same four-proposal sequence:
+ten confirmed POST steps, verified core/attachment fields, complete membership
+pagination and returned-ID binding. Live membership roles were apprentice and
+mentor rather than the offline fixture's generic member role. Independent reads,
+consumed-approval replay denial, durable journal reopening and shutdown passed.
+Records remain for manual inspection; there was no cleanup. Campaign IDs, payloads,
+credentials and the temporary helper stay outside this public repository. This
+acceptance applies to one account/campaign; future live scenarios need fresh
+identity resolution and explicit campaign/operation/content authorization.

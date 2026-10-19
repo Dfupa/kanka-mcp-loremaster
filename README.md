@@ -297,9 +297,12 @@ arrays. These fields participate in review, durable intent and read-back checks;
 they are not free-form relationships or description-only mentions. See the
 [character API contract](https://app.kanka.io/api-docs/1.0/characters).
 
-Organization and item support in this branch is **offline-validated only**; no
-live Kanka tests were run for these new types. Organization `members` entries take
-`character_entity_id` (universal), optional `role` (default `Member`), `is_private`
+Organization and item creation passed offline tests and a separately authorized
+public synthetic live run in one campaign. The live run used the normal stdio
+server, separate local approvals and read-back, including two real memberships.
+This is scoped acceptance evidence, not a guarantee for every account or field.
+Organization `members` entries take `character_entity_id` (universal), optional
+`role` (default `Member`), `is_private`
 (default true), `pin_id` (0–3, default 0) and `status_id` (0–2, default 0 for active).
 The backend resolves character IDs and the newly created organization's module ID
 for actual membership POSTs. `organisation.create` and `organisation.member.add`

@@ -4,7 +4,8 @@ The default MCP server remains GET-only with eight tools. Explicit configuration
 adds scoped character, organization and item creation, reviewed through a local
 terminal. All paths are tested with mocked HTTP and actual stdio/CLI processes.
 The character path also passed an earlier authorized live run in one campaign.
-Organization/member/item execution remains offline-only in this branch.
+Organization/member/item execution also passed a separately authorized public
+synthetic live run in one campaign; see the acceptance evidence below.
 
 ## Stored proposals and local approval
 
@@ -73,7 +74,7 @@ Inventory amounts accept equivalent numeric API representations; all other
 approved fields are compared strictly. Collections are compared as multisets,
 without relying on API ordering, and actual attachment IDs must match recorded IDs.
 
-## Organization membership and item extension (offline only)
+## Organization membership and item extension
 
 `prepare_organisation_creation` supports name, description, privacy, optional type
 and explicit `OrganisationMemberDraft` entries. A member's `character_entity_id`
@@ -88,8 +89,8 @@ The sequence is an organization core POST, then one POST per membership to
 character module IDs. Core/membership creation require separate scope classes.
 GET-only member verification checks ownership, all pages, exact approved fields
 and recorded membership IDs. Missing pagination metadata fails closed even when
-the docs show a simplified single-record response. This contract remains subject
-to a separately authorized future live test.
+the docs show a simplified single-record response. The authorized live run
+returned a complete two-member list and passed these checks.
 
 `prepare_item_creation` supports name, HTML description, privacy and optional
 text `type`, `price`, `size`, `weight`. It uses `POST items`, requires `item.create`,
@@ -108,7 +109,7 @@ The extended offline stdio workflow creates mentor → item → Éldan with orig
 attachments → organization with both characters as members. Each proposal has a
 separate terminal approval and scope check. Ten mocked POSTs create four core
 records and six attachment/membership records. All HTTP transports are forced
-mocks; the new organization/item paths have not been exercised live. See the
+mocks. A separate authorized live run also exercised these paths. See the
 [scenario specification](synthetic-creation-validation.md) and Kanka's
 [organizations](https://app.kanka.io/api-docs/1.0/organisations),
 [memberships](https://app.kanka.io/api-docs/1.0/organisation-members), and
@@ -216,3 +217,28 @@ in the private local report.
 A new live execution test needs explicit campaign/operation consent and review of
 the exact proposed fields/privacy. Cleanup is separately scoped. Image upload,
 automatic modes, canon overwrites and broader entity workflows remain later work.
+
+### Authorized organization/item live acceptance
+
+After reviewing draft PR #4, the user explicitly authorized a public synthetic
+live test and, when the previous test characters returned 404, authorized their
+recreation. The normal opt-in stdio server prepared and executed four separately
+approved proposals: mentor, item, character with four attachments, and organization
+with two actual memberships. All ten journaled POST steps were confirmed and all
+four proposals reached verified completion. No direct setup writes were needed.
+
+The item matched its description, privacy, type, price, size and weight. Character
+verification covered the original biography, age/sex, resolved species/location,
+mentor relation, equipped linked inventory and two public posts. The organization
+and two public active memberships matched the returned character module IDs and
+the distinct apprentice/mentor roles. Membership pagination was complete.
+Independent reads checked core fields and memberships; status, consumed-approval
+replay rejection, journal reopening, token absence from storage and normal stdio
+shutdown passed. Inventory used the upstream default visibility as documented.
+
+The local host performed separate terminal approvals under the user's explicit
+test authorization; this does not establish independent human authentication.
+Evidence and campaign data remain in a private local report outside Git. Records
+were left for user inspection; no cleanup, edits or deletion were requested.
+This run covers one account/campaign and the supplied fields, not every privacy
+mode or permission combination. Future live writes need new explicit scope.

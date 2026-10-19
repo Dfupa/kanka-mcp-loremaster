@@ -22,8 +22,9 @@ The system must know the difference between **reading established lore** and
   feature branches were deleted; do not recreate them or add work to them.
 - **Current slice:** organization creation with character memberships first,
   then item proposals/execution, reusing supervised approval and durable progress.
-  Keep the new PR in draft. The user explicitly requested **offline validation
-  only** for this slice: no live Kanka tests, writes or credential use.
+  Keep PR #4 in draft. Initial validation was offline-only. The user subsequently
+  reviewed the draft and explicitly authorized one public synthetic live test,
+  including recreating the two deleted synthetic character dependencies.
 - Preserve the user's untracked `codex_kanka_loremaster_AGENTS.md` unchanged.
   Test fixtures stay outside the release package; do not add synthetic MCP tools
   or retain campaign-specific one-off helpers in the product.
@@ -41,8 +42,9 @@ branch are allowed. The user's authorization for Kanka has been **READ-ONLY**.
 There is no standing authorization to create, modify, delete, transform, or
 otherwise persist anything in any Kanka campaign.
 Offline rehearsals and development of opt-in supervised character, organization,
-membership and item creation are authorized. The current request explicitly
-excludes live Kanka testing. The normal server remains
+membership and item creation are authorized. A subsequent explicit exception
+authorized one public synthetic live acceptance run through the MCP executor.
+It does not grant standing campaign write permission. The normal server remains
 read-only. Enabling its optional creation tools requires explicit local database,
 campaign and operation configuration; execution also requires separate local
 review/approval. This development authorization does **not** permit new live Kanka
@@ -179,6 +181,22 @@ The local host performed approval under explicit user test authorization; this
 does not prove independent human authentication. Test records remain for user
 inspection; deletion was not requested. No live IDs, payloads or campaign-specific
 helpers are committed. No new standing write permission is implied.
+
+**PR #4 live acceptance:** after reviewing the draft, the user explicitly
+requested a public synthetic live run. The old test characters were absent from
+name searches and returned 404; the user explicitly authorized recreating both.
+The normal stdio server and separate terminal approval command created mentor,
+item, character with relation/inventory/two posts, and organization with two
+actual memberships: four proposals and ten confirmed POST steps. All four reached
+verified completion. The item text fields, original character biography/profile,
+resolved species/location and public active apprentice/mentor memberships passed
+read-back. Membership pagination was complete; independent core/member reads,
+status, consumed-approval replay rejection, journal reopening, token-free storage
+and normal shutdown passed. No production code changes were needed. The host
+performed approvals under the user's explicit test authorization, not independent
+human authentication. Records remain for inspection; no cleanup/deletion occurred.
+Only sanitized evidence belongs in Git/PRs. This one-account/campaign result does
+not grant standing write permission or establish every optional field/privacy case.
 
 ### Account behavior, completeness and remaining local safeguards
 
@@ -383,7 +401,8 @@ with their originating note/session and retain provenance for reversibility.
 scoped opt-in character/organization/item creation on the current feature branch. Enable it
 only with all three explicit local creation settings and separate terminal
 approval. Do not add unrestricted writes or treat chat assertions as approval.
-No new live integration writes are authorized by this development request.
+The separately authorized synthetic acceptance run is a one-off exception;
+future live writes still require explicit scope and local proposal approval.
 
 The accepted offline rehearsal still permits POST simulation only through its
 mandatory MockTransport. The production GET client stays separate from the writer.
@@ -488,7 +507,8 @@ player persona. Separate suggestions from successful persisted operations.
    the untracked handoff copy. Keep commits focused and the new PR in draft.
 2. Organization creation and two actual memberships (synthetic Éldan and mentor)
    were added before item creation. Both use the same local approval, scope,
-   durable progress and read-back path. Validate everything offline only.
+   durable progress and read-back path. Automated tests remain offline-only;
+   a separate public synthetic live acceptance run was subsequently authorized.
 3. The complete stdio scenario creates mentor → compass item → Éldan with
    relation/inventory/two posts → organization with both characters as members.
    Each entity is its own explicitly approved proposal. Returned universal and
@@ -496,7 +516,7 @@ player persona. Separate suggestions from successful persisted operations.
    batch transaction, live IDs or automatic deletion.
 4. Run install, Ruff format/check/format-check and full Pytest in order before
    pushing; inspect CI for the exact published commit. Historical live character
-   acceptance does not establish live organization/member/item API behavior.
+   acceptance alone does not establish live organization/member/item API behavior.
 5. Full canon-aware session-note processing, broader edits, uploads, transfers,
    automatic modes and remote authentication remain future milestones. The user
    explicitly asked to ignore the observed relation mirroring as a blocker.
