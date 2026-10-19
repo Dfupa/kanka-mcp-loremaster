@@ -29,6 +29,7 @@ async def test_sdk_registers_tools_dispatches_reads_and_closes_client(
         "search_entities",
         "find_entities_by_name",
         "get_entity",
+        "get_entity_full",
         "get_entity_posts",
         "get_entity_inventory",
         "get_entity_relations",

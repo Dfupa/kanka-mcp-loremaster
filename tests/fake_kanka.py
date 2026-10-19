@@ -36,6 +36,8 @@ def handler(request: httpx.Request) -> httpx.Response:
         raise RuntimeError("Unexpected non-GET request")
     path = request.url.path.removeprefix("/1.0/")
     page = int(request.url.params.get("page", 1))
+    if path == "profile":
+        return envelope({"rate_limit": 1_000_000, "default_pagination": 45})
     if path == "campaigns":
         return envelope([{"id": CAMPAIGN_ID, "name": "Synthetic campaign"}])
     if path == "campaigns/7/entities":
@@ -135,6 +137,10 @@ def handler(request: httpx.Request) -> httpx.Response:
         return envelope(
             [{"id": 701, "entity_id": 101, "name": "History", "entry": "Test post"}]
         )
+    if path.startswith("campaigns/7/entities/") and path.count("/") == 4:
+        if path.endswith("/image"):
+            return httpx.Response(200, json={"image": None, "header": None})
+        return envelope([])
     if path.startswith("campaigns/7/entities/"):
         entity_id = int(path.rsplit("/", 1)[1])
         if entity_id in NAMES:

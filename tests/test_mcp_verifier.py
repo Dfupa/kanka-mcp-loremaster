@@ -52,7 +52,7 @@ async def session(monkeypatch):
         await client.aclose()
 
 
-async def test_three_demonstrations_and_all_seven_tools_without_private_output(
+async def test_three_demonstrations_and_all_eight_tools_without_private_output(
     session, capsys
 ):
     await verifier.verify_session(session)
@@ -61,10 +61,12 @@ async def test_three_demonstrations_and_all_seven_tools_without_private_output(
     assert "Inventory check: PASS" in output
     assert "Relations check: PASS" in output
     assert "Search and posts check: PASS" in output
+    assert "Aggregate posts check: PASS" in output
     assert {call.args[0] for call in session.call_tool.await_args_list} == {
         "list_campaigns",
         "find_entities_by_name",
         "get_entity",
+        "get_entity_full",
         "get_entity_inventory",
         "get_entity_relations",
         "search_entities",

@@ -33,7 +33,7 @@ def result_data(result):
     return result.structuredContent
 
 
-async def test_stdio_initialize_seven_tools_reads_errors_recovery_and_shutdown():
+async def test_stdio_initialize_eight_tools_reads_errors_recovery_and_shutdown():
     params = StdioServerParameters(
         command=sys.executable,
         args=[str(ROOT / "tests" / "stdio_fixture_server.py")],
@@ -50,7 +50,7 @@ async def test_stdio_initialize_seven_tools_reads_errors_recovery_and_shutdown()
                     initialized = await session.initialize()
                     assert initialized.serverInfo.name == "Kanka LoreMaster"
                     tools = (await session.list_tools()).tools
-                    assert len(tools) == 7
+                    assert len(tools) == 8
                     for tool in tools:
                         assert tool.annotations.readOnlyHint is True
                         assert tool.annotations.destructiveHint is False
@@ -81,6 +81,18 @@ async def test_stdio_initialize_seven_tools_reads_errors_recovery_and_shutdown()
                     assert article["data"]["entity"]["name"] == "Áster"
                     assert "café" in article["data"]["details"]["entry"]
                     assert article["entity_id"] == 101
+                    full = result_data(
+                        await session.call_tool(
+                            "get_entity_full", {"campaign_id": 7, "entity_id": 101}
+                        )
+                    )
+                    assert full["complete"] is True
+                    assert (
+                        full["data"]["sections"]["posts"]["data"][0]["name"]
+                        == "History"
+                    )
+                    assert full["data"]["sections"]["images"]["data"]["image"] is None
+                    assert len(full["data"]["sections"]) == 11
                     search = result_data(
                         await session.call_tool(
                             "search_entities", {"campaign_id": 7, "query": "Áster"}

@@ -67,6 +67,7 @@ async def verify_session(session: ClientSession) -> None:
         "find_entities_by_name",
         "search_entities",
         "get_entity",
+        "get_entity_full",
         "get_entity_posts",
         "get_entity_inventory",
         "get_entity_relations",
@@ -138,6 +139,18 @@ async def verify_session(session: ClientSession) -> None:
     await call("search_entities", campaign_id=campaign_id, query=NAMES[0])
     await collection("get_entity_posts", campaign_id, selected[0]["entity_id"])
     print("Search and posts check: PASS")
+    aggregate = await call(
+        "get_entity_full",
+        campaign_id=campaign_id,
+        entity_id=selected[0]["entity_id"],
+        sections=["posts"],
+    )
+    if (
+        aggregate.get("complete") is not True
+        or not aggregate["data"]["sections"]["posts"]["complete"]
+    ):
+        raise RuntimeError("Incomplete entity aggregation")
+    print("Aggregate posts check: PASS")
 
 
 async def main() -> None:

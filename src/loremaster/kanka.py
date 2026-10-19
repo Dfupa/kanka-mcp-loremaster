@@ -1,7 +1,10 @@
 """Read-only, asynchronous Kanka API access with explicit campaign boundaries."""
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import AsyncIterator, Mapping
+from contextlib import asynccontextmanager
+from contextvars import ContextVar
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -16,6 +19,30 @@ MAX_RATE_LIMIT_RETRIES = 2
 MAX_RETRY_DELAY = 30
 MAX_LINKED_RECORDS = 20
 MAX_PAGE_ROWS = 100
+
+
+@dataclass
+class ReadBudget:
+    """A per-operation safety budget, paced using the actual account quota."""
+
+    rate_limit: int
+    deadline: float
+    remaining: int = 100
+    next_request: float = 0
+
+    async def wait(self) -> None:
+        """Reserve a GET attempt, including retries, or stop before sending it."""
+        loop = asyncio.get_running_loop()
+        delay = max(0.0, self.next_request - loop.time())
+        if self.remaining <= 0 or loop.time() + delay >= self.deadline:
+            raise KankaError(
+                "Read budget exhausted; continue from the returned section pages",
+                code="read_budget_exhausted",
+            )
+        await asyncio.sleep(delay)
+        self.remaining -= 1
+        self.next_request = loop.time() + 60 / self.rate_limit
+
 
 # A generic entity_id must be resolved to the module's own child_id.
 ENTITY_ENDPOINTS: Mapping[str, str] = {
@@ -35,6 +62,16 @@ ENTITY_ENDPOINTS: Mapping[str, str] = {
     "race": "races",
     "tag": "tags",
     "timeline": "timelines",
+}
+
+ENTITY_COLLECTIONS: Mapping[str, str] = {
+    "attributes": "attributes",
+    "reminders": "reminders",
+    "assets": "entity_assets",
+    "abilities": "entity_abilities",
+    "tags": "entity_tags",
+    "mentions": "mentions",
+    "permissions": "entity_permissions",
 }
 
 
@@ -99,6 +136,9 @@ class KankaClient:
         ):
             raise ValueError("Campaign allowlist must contain positive integer IDs")
         self._allowed_campaign_ids = allowed_campaign_ids
+        self._budget: ContextVar[ReadBudget | None] = ContextVar(
+            "kanka_read_budget", default=None
+        )
         self._http = httpx.AsyncClient(
             base_url=API_BASE_URL,
             headers={
@@ -135,11 +175,17 @@ class KankaClient:
             raise ValueError(f"{name} must be a positive integer")
 
     async def _get(
-        self, path: str, *, params: dict[str, int | str] | None = None
+        self,
+        path: str,
+        *,
+        params: dict[str, int | str] | None = None,
+        require_data: bool = True,
     ) -> dict[str, Any]:
         """GET and validate one Kanka JSON envelope; never leak bearer tokens."""
         try:
             for attempt in range(MAX_RATE_LIMIT_RETRIES + 1):
+                if budget := self._budget.get():
+                    await budget.wait()
                 response = await self._http.get(path, params=params)
                 if response.status_code != 429 or attempt == MAX_RATE_LIMIT_RETRIES:
                     break
@@ -161,9 +207,36 @@ class KankaClient:
             payload = response.json(parse_constant=_reject_nonfinite_json)
         except ValueError:
             raise KankaError("Kanka returned invalid JSON") from None
-        if not isinstance(payload, dict) or "data" not in payload:
+        if not isinstance(payload, dict) or (require_data and "data" not in payload):
             raise KankaError("Kanka returned an invalid response envelope")
         return payload
+
+    @asynccontextmanager
+    async def account_reads(self) -> AsyncIterator[dict[str, int | None]]:
+        """Discover quota without returning personal profile data or guessing tiers.
+
+        Collection page sizes still come from each response's meta.per_page.
+        The request/deadline budgets are local safeguards, not subscription limits.
+        """
+        profile = (await self._get("profile"))["data"]
+        if (
+            not isinstance(profile, dict)
+            or type(profile.get("rate_limit")) is not int
+            or profile["rate_limit"] <= 0
+        ):
+            raise KankaError("Missing or invalid account quota metadata")
+        pagination = profile.get("default_pagination")
+        if pagination is not None and (type(pagination) is not int or pagination < 0):
+            raise KankaError("Missing or invalid account quota metadata")
+        # Live profiles can return 0 for an unset preference; meta.per_page wins.
+        limits = {"rate_limit": profile["rate_limit"], "default_pagination": pagination}
+        token = self._budget.set(
+            ReadBudget(profile["rate_limit"], asyncio.get_running_loop().time() + 90)
+        )
+        try:
+            yield limits
+        finally:
+            self._budget.reset(token)
 
     @staticmethod
     def _entity_type(entity: dict[str, Any]) -> str:
@@ -257,7 +330,9 @@ class KankaClient:
         raise KankaError("Listing exceeded the pagination safety limit")
 
     @staticmethod
-    def _validate_rows(batch: Any, *, require_id: bool = True) -> list[dict[str, Any]]:
+    def _validate_rows(
+        batch: Any, *, require_id: bool = True, max_rows: int = MAX_PAGE_ROWS
+    ) -> list[dict[str, Any]]:
         """Reject malformed or oversized collections before processing records."""
         if not isinstance(batch, list) or not all(
             isinstance(row, dict)
@@ -268,7 +343,7 @@ class KankaClient:
             for row in batch
         ):
             raise KankaError("Invalid entity listing")
-        if len(batch) > MAX_PAGE_ROWS:
+        if len(batch) > max_rows:
             raise KankaError("Listing exceeded the page size safety limit")
         return batch
 
@@ -277,10 +352,15 @@ class KankaClient:
         response: dict[str, Any], page: int, *, require_id: bool = True
     ) -> tuple[list[dict[str, Any]], bool]:
         """Validate rows and paging without following API-supplied URLs."""
-        batch = KankaClient._validate_rows(response["data"], require_id=require_id)
         meta, links = response.get("meta", {}), response.get("links", {})
         if not isinstance(meta, dict) or not isinstance(links, dict):
             raise KankaError("Invalid pagination metadata")
+        per_page = meta.get("per_page", MAX_PAGE_ROWS)
+        if type(per_page) is not int or per_page <= 0:
+            raise KankaError("Invalid pagination per_page")
+        batch = KankaClient._validate_rows(
+            response["data"], require_id=require_id, max_rows=per_page
+        )
         if "last_page" not in meta and "next" not in links:
             raise KankaError("Missing pagination completeness metadata")
         current = meta.get("current_page", page)
@@ -484,6 +564,96 @@ class KankaClient:
             if type(row.get("entity_id")) is not int or row["entity_id"] != entity_id:
                 raise KankaError("Kanka returned posts from a different entity")
         return response
+
+    async def get_entity_collection(
+        self, campaign_id: int, entity_id: int, section: str, *, page: int = 1
+    ) -> dict[str, Any]:
+        """Read a documented attachment collection without expanding linked lore.
+
+        The aggregate verifies the subject first. Ownership fields are checked
+        when documented; tags/permissions rely on the scoped endpoint. Missing
+        pagination metadata is explicit and never establishes an empty collection.
+        """
+        self._check_campaign(campaign_id)
+        self._check_id(entity_id, "entity_id")
+        self._check_id(page, "page")
+        if section not in ENTITY_COLLECTIONS:
+            raise ValueError("Unsupported entity collection")
+        path = (
+            f"campaigns/{campaign_id}/entities/{entity_id}/"
+            f"{ENTITY_COLLECTIONS[section]}"
+        )
+        payload = await self._get(path, params={"page": page})
+        if "meta" not in payload and "links" not in payload:
+            if page != 1:
+                raise KankaError("Collection pagination is unavailable")
+            rows = self._validate_rows(
+                payload["data"], require_id=section != "mentions"
+            )
+            next_page = None
+            missing = [
+                {"source": API_BASE_URL + path, "reason": "pagination_unavailable"}
+            ]
+        else:
+            rows, has_next = self._validate_page(
+                payload, page, require_id=section != "mentions"
+            )
+            next_page = page + 1 if has_next else None
+            missing = []
+        for row in rows:
+            if (
+                section in ("attributes", "assets", "abilities", "mentions")
+                or "entity_id" in row
+            ):
+                if (
+                    type(row.get("entity_id")) is not int
+                    or row["entity_id"] != entity_id
+                ):
+                    raise KankaError(
+                        "Kanka returned attachments from a different entity"
+                    )
+            if row.get("campaign_id") is not None and (
+                type(row["campaign_id"]) is not int or row["campaign_id"] != campaign_id
+            ):
+                raise KankaError("Kanka returned attachments from a different campaign")
+            if section == "reminders" and (
+                type(row.get("remindable_id")) is not int
+                or row["remindable_id"] != entity_id
+                or not isinstance(row.get("remindable_type"), str)
+                or row["remindable_type"].replace("\\", "/") != "App/Models/Entity"
+            ):
+                raise KankaError("Kanka returned a reminder for a different subject")
+        return {
+            "data": rows,
+            "next_page": next_page,
+            "complete": page == 1 and next_page is None and not missing,
+            "missing_data": missing,
+        }
+
+    async def get_entity_images(
+        self, campaign_id: int, entity_id: int
+    ) -> dict[str, Any]:
+        """Read portrait/header references without downloading or uploading files."""
+        self._check_campaign(campaign_id)
+        self._check_id(entity_id, "entity_id")
+        payload = await self._get(
+            f"campaigns/{campaign_id}/entities/{entity_id}/image", require_data=False
+        )
+        images = payload.get("data", payload)
+        if not isinstance(images, dict) or not {"image", "header"} <= images.keys():
+            raise KankaError("Invalid entity image metadata")
+        if any(
+            images[key] is not None and not isinstance(images[key], dict)
+            for key in ("image", "header")
+        ):
+            raise KankaError("Invalid entity image references")
+        for reference in images.values():
+            if isinstance(reference, dict) and any(
+                reference.get(key) is not None and not isinstance(reference[key], str)
+                for key in ("uuid", "full", "thumbnail")
+            ):
+                raise KankaError("Invalid entity image reference fields")
+        return {key: images[key] for key in ("image", "header")}
 
     async def get_entity_inventory(
         self, campaign_id: int, entity_id: int, *, page: int = 1

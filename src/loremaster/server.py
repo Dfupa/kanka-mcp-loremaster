@@ -12,6 +12,8 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import Field
 
+from loremaster.aggregate import EntitySection
+from loremaster.aggregate import get_entity_full as read_entity_full
 from loremaster.kanka import API_BASE_URL, KankaClient, KankaError
 from loremaster.results import ToolResult
 
@@ -26,7 +28,7 @@ READ_ONLY = ToolAnnotations(
 
 
 def create_server(client: KankaClient) -> FastMCP:
-    """Bind seven read-only tools and close the injected client on shutdown."""
+    """Bind read-only tools and close the injected client on shutdown."""
 
     @asynccontextmanager
     async def lifespan(_server: FastMCP) -> AsyncIterator[None]:
@@ -187,6 +189,35 @@ def create_server(client: KankaClient) -> FastMCP:
         """
         return await read(
             lambda: client.get_entity(campaign_id, entity_id),
+            f"campaigns/{campaign_id}/entities/{entity_id}",
+            campaign_id=campaign_id,
+            entity_id=entity_id,
+        )
+
+    @server.tool(annotations=READ_ONLY)
+    async def get_entity_full(
+        campaign_id: PositiveID,
+        entity_id: PositiveID,
+        sections: list[EntitySection] | None = None,
+        section_pages: dict[EntitySection, PositiveID] | None = None,
+    ) -> ToolResponse:
+        """Aggregate core, description and all supported direct entity sections.
+
+        None selects all sections; [] reads core only. Includes posts, inventory,
+        relations, attributes, reminders/dates, assets, abilities, tags, mentions,
+        permissions and image references. Inspect each section's source/status,
+        missing_data and continuation. Resume using sections=list(continuation)
+        and section_pages=continuation. Account quota and response pagination are
+        discovered dynamically. No recursive lore expansion or binary downloads.
+        """
+        return await read(
+            lambda: read_entity_full(
+                client,
+                campaign_id,
+                entity_id,
+                sections=sections,
+                section_pages=section_pages,
+            ),
             f"campaigns/{campaign_id}/entities/{entity_id}",
             campaign_id=campaign_id,
             entity_id=entity_id,
