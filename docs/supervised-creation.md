@@ -61,6 +61,11 @@ there are no cleanup or rollback HTTP requests.
 
 ## Recovery work before a real executor
 
+The next checkpoint is the [offline synthetic acceptance workflow](synthetic-creation-validation.md).
+Review and validate that scenario before implementing the recovery work below.
+Its acceptance/reporting status is tracked in that runbook; existing regression
+test success alone does not complete the checkpoint.
+
 The gate and journal are process-local. They do not provide durable idempotency,
 multi-process coordination, atomic Kanka transactions or production authorization.
 Approval does not freeze referenced records. Current same-instance read-back

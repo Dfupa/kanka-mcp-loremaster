@@ -290,6 +290,9 @@ Inventory visibility parameters require live contract verification before a
 real adapter is implemented (the API docs contain a misspelled parameter).
 See [the supervised-creation contract](docs/supervised-creation.md) for the trust
 boundary and remaining recovery work.
+The next checkpoint is the [offline synthetic creation workflow](docs/synthetic-creation-validation.md):
+review its frozen scenario, validate it and inspect the expected/observed report
+before starting durable tracking or reconciliation. Its validation is pending.
 
 ## Limits and next milestones
 

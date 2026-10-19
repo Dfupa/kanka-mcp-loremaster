@@ -24,6 +24,12 @@ The system must know the difference between **reading established lore** and
 - The current slice is the shared proposal/approval contract and offline
   supervised-creation verification. Keep the next PR focused and in draft for
   review; merging and live write authorization remain separate decisions.
+- **Next checkpoint, as requested by the user:** design and validate the
+  **offline-only** synthetic creation workflow in
+  `docs/synthetic-creation-validation.md` before implementing durable progress
+  tracking, reconciliation or further creation features. The design is ready;
+  focused validation/reporting and results review remain pending. Do not infer
+  acceptance from previously passing regression tests.
 - Continue from the latest remote branch, not an earlier chat-generated ZIP.
 - `README.md` now documents the verified implementation, setup and limitations.
   Keep it accurate as functionality and branch setup change.
@@ -492,7 +498,9 @@ If blocked, give the specific error and a realistic next step; do not claim
 future work has already been carried out.
 
 **Continuation suggestion:** "Read AGENTS.md and docs/supervised-creation.md on
-feat/supervised-creation. Inspect the shared approval contract, offline rehearsal,
-tests and current PR/CI before extending recovery or host integration. Keep live
+feat/supervised-creation. First review and validate the offline-only synthetic
+workflow in docs/synthetic-creation-validation.md and report expected versus
+observed results before extending recovery or host integration. Inspect the
+shared approval contract, rehearsal, tests and current PR/CI. Keep live
 Kanka read-only until new write consent and a disposable campaign are supplied.
 Preserve secrets and existing user files."
