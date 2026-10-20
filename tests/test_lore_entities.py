@@ -63,6 +63,7 @@ async def services(tmp_path, monkeypatch):
     reader = KankaClient(
         "offline-lore-token",
         allowed_campaign_ids=frozenset({7}),
+        admin_campaign_ids=frozenset({7}),
         transport=httpx.MockTransport(api.handle),
     )
     database = tmp_path / "private.sqlite3"

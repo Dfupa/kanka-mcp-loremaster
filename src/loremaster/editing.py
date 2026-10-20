@@ -4,6 +4,7 @@ import asyncio
 import json
 import sqlite3
 from decimal import Decimal, InvalidOperation
+from functools import partial
 from typing import Any
 
 import httpx
@@ -17,7 +18,9 @@ from loremaster.edit_models import (
 from loremaster.edit_store import EditStore
 from loremaster.execution import KNOWN_REJECTIONS
 from loremaster.kanka import API_BASE_URL, KankaClient, KankaError
+from loremaster.publication import verify_publication_sources
 from loremaster.verification import entry_matches
+from loremaster.write_diagnostics import send_write
 
 CORE_FIELDS = (
     "id",
@@ -208,6 +211,16 @@ class EditService:
         ):
             raise PermissionError(
                 "Edit is outside the configured campaign/operation scope"
+            )
+
+    def _visibility(self, draft: EditDraft, before: dict[str, Any]) -> None:
+        """Leave visibility intact and reject admin-only PATCHes for non-admins."""
+        for record in (before["core"], before.get("record", {})):
+            self.reader.require_write_visibility(
+                draft.campaign_id,
+                is_private=record.get("is_private") is True,
+                visibility_id=record.get("visibility_id")
+                or (2 if record.get("visibility") == "admin" else None),
             )
 
     async def _references(self, draft: EditDraft) -> dict[str, Any]:
@@ -484,18 +497,59 @@ class EditService:
             if any(row["entity_id"] != draft.entity_id for row in candidates["exact"]):
                 raise ValueError("The proposed name conflicts with an existing entity")
 
-    async def prepare(self, draft: EditDraft) -> dict[str, Any]:
+    async def prepare(
+        self,
+        draft: EditDraft,
+        *,
+        proposal_id: str | None = None,
+        expected_before: dict[str, Any] | None = None,
+        expected_owner: dict[str, Any] | None = None,
+        provenance: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Read the exact target/references and persist an unapproved minimal diff."""
         draft = EditDraft.model_validate(draft.model_dump())
         self._scope(draft)
+        if proposal_id is not None:
+            previous = self.store.existing(proposal_id)
+            if previous is not None:
+                if (
+                    previous["plan"]["draft"] != draft.model_dump(mode="json")
+                    or previous["plan"].get("provenance") != provenance
+                ):
+                    raise ValueError("Preparation ID is bound to different content")
+                return previous
         async with self.reader.account_reads():
             before = await self._snapshot(draft)
+            self._visibility(draft, before)
+            record = before["core" if draft.kind in CORE_EDIT_ENDPOINTS else "record"]
+            for actual, baseline in (
+                (record, expected_before),
+                (before["core"], expected_owner),
+            ):
+                for field, expected in (baseline or {}).items():
+                    observed = actual.get(field)
+                    if field == "amount" and type(expected) in (int, float, str):
+                        try:
+                            equal = Decimal(str(observed)) == Decimal(str(expected))
+                        except InvalidOperation:
+                            equal = False
+                    else:
+                        equal = (
+                            type(observed) is type(expected) and observed == expected
+                        )
+                    if field not in actual or not equal:
+                        raise ValueError(
+                            "note_evidence_stale: edit baseline changed; "
+                            "refresh analysis"
+                        )
             refs = await self._references(draft)
             await self._rename(draft)
         plan = build_edit_plan(draft, before, refs)
+        if provenance is not None:
+            plan["provenance"] = provenance
         if draft.kind == "tag" and plan["body"]["tag_id"] in before["core"]["tags"]:
             raise ValueError("The replacement tag is already assigned")
-        return self.store.prepare(plan)
+        return self.store.prepare(plan, proposal_id=proposal_id)
 
     def status(self, campaign_id: int, proposal_id: str) -> dict[str, Any]:
         """Read scoped local status without exposing the private baseline/diff."""
@@ -518,6 +572,7 @@ class EditService:
             "entity_id": draft.entity_id,
             "kind": draft.kind,
             "record_id": draft.record_id,
+            "diagnostics": review["diagnostics"],
         }
 
     async def _verify(self, draft: EditDraft, plan: dict[str, Any]) -> None:
@@ -565,10 +620,14 @@ class EditService:
                         budget = self.reader._budget.get()
                         if budget is None:
                             raise RuntimeError("Edit request budget is unavailable")
-                        await budget.wait()
+                        await verify_publication_sources(
+                            self.reader, draft.campaign_id, plan.get("provenance")
+                        )
+                        await self.reader.reserve_request()
                         self._scope(draft)
+                        self._visibility(draft, current)
                         self.store.begin(proposal_id, grant)
-                        await self._send(draft, proposal_id, plan)
+                        await self._send(draft, proposal_id, plan, grant)
                     await self._verify(draft, plan)
                     self.store.complete(proposal_id, grant)
                 return {
@@ -607,14 +666,28 @@ class EditService:
                         "status_code": error.status_code
                         if isinstance(error, KankaError)
                         else None,
+                        "retry_after_seconds": error.retry_after_seconds
+                        if isinstance(error, KankaError)
+                        else None,
                     },
                 }
 
     async def _send(
-        self, draft: EditDraft, proposal_id: str, plan: dict[str, Any]
+        self, draft: EditDraft, proposal_id: str, plan: dict[str, Any], grant: str
     ) -> None:
+        record_receipt = partial(
+            self.store.journal.record_receipt, proposal_id, "patch", grant
+        )
+        receipt: dict[str, Any] = {"stage": "request"}
         try:
-            response = await self._writer.patch(plan["path"], json=plan["body"])
+            response, payload, receipt = await send_write(
+                self._writer,
+                "PATCH",
+                plan["path"],
+                plan["body"],
+                record_receipt,
+                self.reader.observe_response,
+            )
             if not 200 <= response.status_code < 300:
                 self.store.finish(
                     proposal_id,
@@ -626,8 +699,13 @@ class EditService:
                     f"Kanka returned HTTP {response.status_code}; inspect edit status",
                     code="upstream_http",
                     status_code=response.status_code,
+                    retry_after_seconds=receipt.get("retry_after_seconds"),
                 )
-            record = response.json()["data"]
+            if receipt.get("failure"):
+                raise ValueError("Invalid edit response")
+            record = payload["data"]
+            receipt["stage"] = "identity_validation"
+            record_receipt(receipt)
             if draft.kind in CORE_EDIT_ENDPOINTS:
                 if (
                     not isinstance(record, dict)
@@ -655,16 +733,27 @@ class EditService:
                         raise ValueError("Mismatched tag edit response")
                     record = record | {"id": draft.record_id}
                 self._record_identity(draft, record)
+            receipt["stage"] = "identity_verified"
+            record_receipt(receipt)
         except asyncio.CancelledError:
             self.store.finish(proposal_id, "uncertain")
             raise
         except (httpx.RequestError, ValueError, KeyError, TypeError):
+            if not receipt.get("failure"):
+                receipt.update(stage="identity_validation", failure="invalid_identity")
+                record_receipt(receipt)
             self.store.finish(proposal_id, "uncertain")
             raise KankaError(
-                "Edit response is uncertain; do not resend", code="uncertain_result"
+                f"Edit response is uncertain ({receipt['failure']}); "
+                "inspect diagnostics",
+                code="uncertain_result",
+                status_code=receipt.get("http_status"),
             ) from None
         except KankaError:
             if self.store.review(proposal_id)["outcome"] == "intent":
+                if receipt.get("stage") == "identity_validation":
+                    receipt["failure"] = "invalid_identity"
+                    record_receipt(receipt)
                 self.store.finish(proposal_id, "uncertain")
             raise
         self.store.finish(proposal_id, "confirmed")

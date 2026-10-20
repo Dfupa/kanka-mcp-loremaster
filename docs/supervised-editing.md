@@ -52,6 +52,14 @@ record ID from its target. It cannot request reciprocal changes with `two_way`.
 Kanka's prior mirroring observation remains outside this slice; no one-way
 guarantee is claimed. A core edit never writes an aggregate response to Kanka.
 
+The host assumes a non-admin role unless the user explicitly identifies an admin
+account and configures `KANKA_ADMIN_CAMPAIGN_IDS` for the selected campaign.
+Editing a private core or an admin-only attachment stops with
+`visibility_requires_admin` before PATCH; visibility is preserved, never widened.
+Creator-readable visibility 3 remains allowed; admin-only visibility is 2.
+Preparation and execution both check this policy. GET-only reconciliation and
+actual Kanka access checks remain independent of the local role declaration.
+
 Kanka documents `PUT/PATCH characters/{character.id}` with the creation body
 parameters. Use only the chosen fields in PATCH and validate preservation of
 omitted fields. Documentation alone does not prove the live partial-update

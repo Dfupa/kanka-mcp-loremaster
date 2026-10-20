@@ -99,6 +99,7 @@ class OfflineCreation:
         self.reader = KankaClient(
             "offline-dummy-token",
             allowed_campaign_ids=frozenset({self.campaign_id}),
+            admin_campaign_ids=frozenset({self.campaign_id}),
             transport=httpx.MockTransport(self._handle),
         )
 

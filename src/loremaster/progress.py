@@ -11,6 +11,7 @@ import os
 import re
 import sqlite3
 import stat
+import time
 from pathlib import Path
 from typing import Any
 
@@ -70,11 +71,64 @@ class CreationJournal:
                 reconciled_by TEXT,
                 PRIMARY KEY (execution_id, key)
             );
+            CREATE TABLE IF NOT EXISTS write_receipts (
+                proposal_id TEXT NOT NULL, step TEXT NOT NULL,
+                attempt TEXT NOT NULL, recorded_at REAL NOT NULL,
+                details TEXT NOT NULL,
+                PRIMARY KEY (proposal_id, step, attempt)
+            );
         """)
 
     def close(self) -> None:
         """Close the journal; committed intent/progress survives shutdown."""
         self._db.close()
+
+    def record_receipt(
+        self, proposal_id: str, step: str, attempt: str, details: dict[str, Any]
+    ) -> None:
+        """Preserve sanitized diagnostics per approval attempt, outside its digest.
+
+        The executor supplies fixed receipt fields; no raw response may be stored.
+        This never changes outcome, approves a request or authorizes a retry.
+        """
+        self._id(proposal_id)
+        allowed = {
+            "stage",
+            "http_status",
+            "media_type",
+            "response_bytes",
+            "response_sha256",
+            "data_shape",
+            "identity_types",
+            "candidate_ids",
+            "failure",
+            "retry_after_seconds",
+        }
+        payload = json.dumps(details, allow_nan=False)
+        if not set(details) <= allowed or len(payload) > 4096:
+            raise ValueError("Invalid write receipt")
+        with self._db:
+            self._db.execute(
+                "INSERT INTO write_receipts VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT(proposal_id,step,attempt) DO UPDATE SET "
+                "recorded_at=excluded.recorded_at, details=excluded.details",
+                (proposal_id, step, attempt, time.time(), payload),
+            )
+
+    def receipts(self, proposal_id: str) -> list[dict[str, Any]]:
+        """Read diagnostic history without exposing approval capability IDs."""
+        self._id(proposal_id)
+        return [
+            {
+                "step": row["step"],
+                "recorded_at": row["recorded_at"],
+                "details": json.loads(row["details"]),
+            }
+            for row in self._db.execute(
+                "SELECT * FROM write_receipts WHERE proposal_id=? ORDER BY recorded_at",
+                (proposal_id,),
+            )
+        ]
 
     @staticmethod
     def _id(execution_id: str) -> None:

@@ -11,6 +11,7 @@ from loremaster.approvals import LocalApprovals
 from loremaster.creation import MAX_PENDING_PROPOSALS
 from loremaster.edit_models import EditDraft, build_edit_plan
 from loremaster.progress import CreationJournal
+from loremaster.publication import require_publication_review
 
 
 class EditStore:
@@ -53,18 +54,28 @@ class EditStore:
             ):
                 raise PermissionError("Reconcile the character's uncertain edit first")
 
-    def prepare(self, plan: dict[str, Any]) -> dict[str, Any]:
+    def prepare(
+        self, plan: dict[str, Any], *, proposal_id: str | None = None
+    ) -> dict[str, Any]:
         """Store an unapproved exact baseline, references and requested diff."""
         draft = EditDraft.model_validate(plan["draft"])
         expected = build_edit_plan(draft, plan["before"], plan["references"])
-        if plan != expected:
+        if {k: v for k, v in plan.items() if k != "provenance"} != expected or (
+            "provenance" in plan and not isinstance(plan["provenance"], dict)
+        ):
             raise ValueError("Invalid derived edit plan")
         payload = json.dumps(plan, ensure_ascii=False, allow_nan=False)
         if len(payload.encode()) > 128 * 1024:
             raise ValueError("Edit proposal exceeds the 128 KiB review budget")
-        proposal_id = "edit_" + uuid.uuid4().hex
+        proposal_id = "edit_" + uuid.uuid4().hex if proposal_id is None else proposal_id
+        CreationJournal._id(proposal_id)
         with self._db:
             self._db.execute("BEGIN IMMEDIATE")
+            previous = self.existing(proposal_id)
+            if previous is not None:
+                if previous["review_digest"] != LocalApprovals._digest(plan):
+                    raise ValueError("Preparation ID is bound to different content")
+                return previous
             self._uncertain_owner(draft)
             count = self._db.execute(
                 "SELECT COUNT(*) FROM edit_proposals WHERE state = 'pending'"
@@ -78,6 +89,15 @@ class EditStore:
             )
         return self.review(proposal_id)
 
+    def existing(self, proposal_id: str) -> dict[str, Any] | None:
+        """Recover an immutable preparation without resetting its approval/state."""
+        CreationJournal._id(proposal_id)
+        if self._db.execute(
+            "SELECT 1 FROM edit_proposals WHERE id=?", (proposal_id,)
+        ).fetchone():
+            return self.review(proposal_id)
+        return None
+
     def _load(self, proposal_id: str) -> tuple[Any, dict[str, Any]]:
         CreationJournal._id(proposal_id)
         row = self._db.execute(
@@ -88,10 +108,12 @@ class EditStore:
         try:
             plan = json.loads(row["payload"])
             draft = EditDraft.model_validate(plan["draft"])
-            if row["digest"] != LocalApprovals._digest(plan) or plan != build_edit_plan(
-                draft, plan["before"], plan["references"]
-            ):
+            if row["digest"] != LocalApprovals._digest(plan) or {
+                k: v for k, v in plan.items() if k != "provenance"
+            } != build_edit_plan(draft, plan["before"], plan["references"]):
                 raise ValueError("Changed edit")
+            if "provenance" in plan and not isinstance(plan["provenance"], dict):
+                raise ValueError("Invalid edit provenance")
         except (ValueError, KeyError, TypeError):
             raise PermissionError("Stored edit failed integrity validation") from None
         return row, plan
@@ -108,15 +130,26 @@ class EditStore:
             "reviewed_by": row["reviewer"],
             "reconciled_by": row["reconciled_by"],
             "plan": plan,
+            "diagnostics": self.journal.receipts(proposal_id),
         }
 
-    def approve(self, proposal_id: str, digest: str, reviewer: str) -> None:
+    def approve(
+        self,
+        proposal_id: str,
+        digest: str,
+        reviewer: str,
+        *,
+        publication_digest: str | None = None,
+    ) -> None:
         """Local host only: approve the unchanged proposal for five minutes."""
         if not isinstance(reviewer, str) or not reviewer.strip():
             raise ValueError("An identified local reviewer is required")
         with self._db:
             self._db.execute("BEGIN IMMEDIATE")
             row, _plan = self._load(proposal_id)
+            require_publication_review(
+                _plan.get("provenance"), publication_digest, _plan["draft"]
+            )
             if row["state"] in ("revoked", "stale", "complete"):
                 raise PermissionError("Edit is revoked, stale or complete")
             if row["outcome"] in ("intent", "uncertain"):

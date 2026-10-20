@@ -2,6 +2,7 @@
 
 import asyncio
 import sqlite3
+from functools import partial
 from typing import Any
 from unicodedata import normalize
 
@@ -24,12 +25,14 @@ from loremaster.creation import (
     validate_creation_draft,
 )
 from loremaster.kanka import API_BASE_URL, KankaClient, KankaError
+from loremaster.publication import verify_publication_sources
 from loremaster.verification import (
     creation_details,
     matches_creation_fields,
     verify_created,
     verify_result_ids,
 )
+from loremaster.write_diagnostics import send_write
 
 KNOWN_REJECTIONS = {400, 401, 403, 404, 409, 422, 429}
 
@@ -80,6 +83,7 @@ class CreationService:
 
     async def _references(self, draft: CreationDraft) -> dict[str, Any]:
         self.scope.check(draft)
+        self._visibility(draft)
         campaign = (await self.reader._get(f"campaigns/{draft.campaign_id}"))["data"]
         if (
             not isinstance(campaign, dict)
@@ -133,17 +137,45 @@ class CreationService:
             ]
         )
 
-    async def prepare(self, draft: CreationDraft) -> dict[str, Any]:
+    async def prepare(
+        self,
+        draft: CreationDraft,
+        *,
+        proposal_id: str | None = None,
+        provenance: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Resolve references and save a proposal; issue no approval or POST."""
         draft = validate_creation_draft(draft)
         self.scope.check(draft)
+        if proposal_id is not None:
+            previous = self.store.existing(proposal_id)
+            if previous is not None:
+                if (
+                    self.store.draft(proposal_id) != draft
+                    or previous["provenance"] != provenance
+                ):
+                    raise ValueError("Preparation ID is bound to different content")
+                return previous
+        self._visibility(draft)
         async with self.reader.account_reads():
             refs = await self._references(draft)
             if await self._name_exists(draft):
                 raise ValueError(
                     "Entity name already exists; resolve the conflict first"
                 )
-        return self.store.prepare(draft, refs)
+        return self.store.prepare(
+            draft, refs, proposal_id=proposal_id, provenance=provenance
+        )
+
+    def _visibility(self, draft: CreationDraft) -> None:
+        """Check every core/attachment before preparing or sending any write."""
+        for operation in preview_creation(draft)["operations"]:
+            body = operation["body"]
+            self.reader.require_write_visibility(
+                draft.campaign_id,
+                is_private=body.get("is_private", False),
+                visibility_id=body.get("visibility_id"),
+            )
 
     def status(self, campaign_id: int, proposal_id: str) -> dict[str, Any]:
         """Read scoped proposal progress; do not return another campaign's draft."""
@@ -163,7 +195,7 @@ class CreationService:
                 "approval_expires_at",
                 "reviewed_by",
             )
-        }
+        } | {"diagnostics": self.store.journal.receipts(proposal_id)}
 
     async def execute(self, campaign_id: int, proposal_id: str) -> dict[str, Any]:
         """Claim local approval once and execute only its stored, scoped draft."""
@@ -181,6 +213,7 @@ class CreationService:
                         "Uncertain intent requires reviewed reconciliation",
                         code="reconciliation_required",
                     )
+                self._visibility(approved.draft)
                 async with self.reader.account_reads():
                     return await self._execute(proposal_id, approved)
             except asyncio.CancelledError:
@@ -229,7 +262,11 @@ class CreationService:
                         "status_code": error.status_code
                         if isinstance(error, KankaError)
                         else None,
+                        "retry_after_seconds": error.retry_after_seconds
+                        if isinstance(error, KankaError)
+                        else None,
                     },
+                    "diagnostics": self.store.journal.receipts(proposal_id),
                 }
 
     async def _execute(
@@ -274,12 +311,29 @@ class CreationService:
             budget = self.reader._budget.get()
             if budget is None:
                 raise RuntimeError("Creation requires an account request budget")
-            await budget.wait()
+            await verify_publication_sources(
+                self.reader,
+                draft.campaign_id,
+                self.store.review(proposal_id).get("provenance"),
+            )
+            await self.reader.reserve_request()
             self.scope.check(draft)
+            self._visibility(draft)
             self.store.check(proposal_id, approved)
             journal.begin(proposal_id, approved, key, path, body)
+            record_receipt = partial(
+                journal.record_receipt, proposal_id, key, approved.proposal_id
+            )
+            receipt: dict[str, Any] = {"stage": "request"}
             try:
-                response = await self._writer.post(path, json=body)
+                response, payload, receipt = await send_write(
+                    self._writer,
+                    "POST",
+                    path,
+                    body,
+                    record_receipt,
+                    self.reader.observe_response,
+                )
                 if not 200 <= response.status_code < 300:
                     journal.finish(
                         proposal_id,
@@ -293,14 +347,43 @@ class CreationService:
                         "retry requires review",
                         code="upstream_http",
                         status_code=response.status_code,
+                        retry_after_seconds=receipt.get("retry_after_seconds"),
                     )
-                data = response.json()["data"]
+                if receipt.get("failure"):
+                    raise ValueError("Invalid creation response")
+                data = payload["data"]
                 if (
                     isinstance(data, list)
                     and key.startswith("relation:")
                     and len(data) == 1
                 ):
                     data = data[0]
+                if (
+                    key == kind
+                    and not isinstance(draft, EntityPostDraft)
+                    and isinstance(data, dict)
+                    and type(data.get("id")) is int
+                    and data["id"] > 0
+                    and data.get("entity_id") is None
+                ):
+                    receipt["stage"] = "identity_readback"
+                    record_receipt(receipt)
+                    core = await self.reader.get_entity_by_child(
+                        draft.campaign_id, kind, data["id"]
+                    )
+                    if not matches_creation_fields(body, creation_details(draft, core)):
+                        raise ValueError(
+                            "Response module ID differs from the approved entity"
+                        )
+                    data = core["details"]
+                    receipt.update(
+                        stage="identity_verified",
+                        candidate_ids={
+                            "id": data["id"],
+                            "entity_id": data["entity_id"],
+                        },
+                    )
+                    record_receipt(receipt)
                 owner = (
                     "organisation_id"
                     if key.startswith("member:")
@@ -332,16 +415,37 @@ class CreationService:
                         )
                     )
                 ):
+                    receipt.update(
+                        stage="identity_validation", failure="invalid_identity"
+                    )
+                    record_receipt(receipt)
                     raise ValueError("Unverifiable creation identity")
+                receipt["stage"] = "identity_verified"
+                record_receipt(receipt)
             except asyncio.CancelledError:
                 journal.finish(proposal_id, key, "uncertain")
                 raise
             except (httpx.RequestError, ValueError, KeyError, TypeError):
+                if not receipt.get("failure"):
+                    receipt.update(
+                        stage="identity_validation", failure="invalid_identity"
+                    )
+                    record_receipt(receipt)
                 journal.finish(proposal_id, key, "uncertain")
                 raise KankaError(
-                    "Creation response could not be verified; do not retry",
+                    f"Creation response could not be verified "
+                    f"({receipt.get('failure', 'invalid_identity')}); "
+                    "inspect diagnostics",
                     code="uncertain_result",
+                    status_code=receipt.get("http_status"),
                 ) from None
+            except KankaError:
+                if journal.states(proposal_id).get(key) == "intent":
+                    if receipt.get("stage") == "identity_readback":
+                        receipt["failure"] = "identity_readback_failed"
+                        record_receipt(receipt)
+                    journal.finish(proposal_id, key, "uncertain")
+                raise
             journal.finish(proposal_id, key, "confirmed", data)
             progress[key] = data
             uid = progress[kind]["entity_id"]
@@ -553,4 +657,87 @@ class CreationService:
             "candidate_id": candidate_id,
             "record": candidates[0],
             "source": API_BASE_URL + pending["path"],
+        }
+
+    async def inspect_recovery(
+        self, campaign_id: int, proposal_id: str
+    ) -> dict[str, Any]:
+        """Discover recovery candidates with GETs; never reconcile or resend.
+
+        Empty visible search results do not establish rejection/rollback. Receipt
+        IDs are hints that must pass exact campaign/type/field checks and origin
+        review through the existing terminal reconciliation command.
+        """
+        status = self.status(campaign_id, proposal_id)
+        if "uncertain" not in status["progress"]:
+            return {**status, "recovery": {"next_action": "inspect_local_status"}}
+        pending = self.store.journal.pending(proposal_id)
+        draft = self.store.draft(proposal_id)
+        kind = creation_kind(draft)
+        recovery: dict[str, Any] = {
+            "next_action": "review_upstream_outcome",
+            "search_complete": False,
+            "absence_proves_rejection": False,
+            "origin_review_required": True,
+            "verification_complete": True,
+            "candidates": [],
+        }
+        if pending["key"] != kind or isinstance(draft, EntityPostDraft):
+            return {
+                **status,
+                "recovery": {
+                    **recovery,
+                    "next_action": "review_exact_attachment_candidate",
+                },
+            }
+        ids: set[int] = set()
+        try:
+            async with self.reader.account_reads():
+                found = await self.reader.find_entities_by_name(campaign_id, draft.name)
+                recovery["search"] = found
+                ids.update(
+                    c["entity_id"] for c in found["exact"] if c["entity_type"] == kind
+                )
+                for receipt in status["diagnostics"]:
+                    hints = receipt["details"].get("candidate_ids", {})
+                    if "entity_id" in hints:
+                        ids.add(hints["entity_id"])
+                    elif "id" in hints:
+                        try:
+                            core = await self.reader.get_entity_by_child(
+                                campaign_id, kind, hints["id"]
+                            )
+                            ids.add(core["entity"]["id"])
+                        except (KankaError, ValueError):
+                            recovery["unverified_receipt_hint"] = True
+                            recovery["verification_complete"] = False
+                if len(ids) > 20:
+                    raise KankaError("Recovery candidate budget exceeded")
+                for uid in sorted(ids):
+                    try:
+                        evidence = await self.inspect_reconciliation(
+                            campaign_id, proposal_id, uid
+                        )
+                        recovery["candidates"].append(
+                            {
+                                "entity_id": uid,
+                                "child_id": evidence["record"]["id"],
+                                "fields_match": True,
+                            }
+                        )
+                    except (KankaError, ValueError):
+                        recovery["verification_complete"] = False
+                        recovery["candidates"].append(
+                            {"entity_id": uid, "fields_match": False}
+                        )
+            recovery["search_complete"] = True
+            if any(candidate["fields_match"] for candidate in recovery["candidates"]):
+                recovery["next_action"] = "review_origin_then_terminal_reconcile"
+        except KankaError as error:
+            recovery["error"] = {"code": error.code, "status_code": error.status_code}
+        return {
+            **status,
+            "recovery": recovery,
+            "complete": recovery["search_complete"]
+            and recovery["verification_complete"],
         }

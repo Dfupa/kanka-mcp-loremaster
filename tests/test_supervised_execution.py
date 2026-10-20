@@ -98,6 +98,8 @@ async def test_preflight_rate_limit_requires_fresh_approval_without_resending(se
     )
     assert denied.isError
     limited = False
+    # Simulate expiry of the server cooldown, which now survives operation scopes.
+    creator.reader._cooldown_until = 0
     authorize(creator, proposal)
     assert (await creator.execute(7, proposal["proposal_id"]))["status"] == "verified"
     assert sum(method == "POST" for method, _path in api.requests) == 5
@@ -200,6 +202,7 @@ async def service(rehearsal, tmp_path):
     reader = KankaClient(
         "offline-test-token",
         allowed_campaign_ids=frozenset({7}),
+        admin_campaign_ids=frozenset({7}),
         transport=httpx.MockTransport(handler),
     )
     store = LocalApprovals(tmp_path / "private.sqlite3")

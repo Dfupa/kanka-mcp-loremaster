@@ -30,11 +30,16 @@ async def test_upstream_failures_set_mcp_error_and_sanitized_structured_details(
         data = result.structuredContent
         assert data["data"] is None and data["complete"] is False
         assert data["campaign_id"] == 7 and data["entity_id"] == 102
-        assert data["error"] == {
+        expected_error = {
             "code": "upstream_http",
             "message": f"Kanka returned HTTP {status}",
             "status_code": status,
         }
+        if status == 429:
+            delay = data["error"]["retry_after_seconds"]
+            assert 59 < delay <= 60
+            expected_error["retry_after_seconds"] = delay
+        assert data["error"] == expected_error
         assert "PRIVATE" not in result.content[0].text
         assert "secret-test-token" not in result.content[0].text
     finally:

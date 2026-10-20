@@ -46,6 +46,7 @@ async def editor(tmp_path, monkeypatch):
     reader = KankaClient(
         "offline-edit-token",
         allowed_campaign_ids=frozenset({7}),
+        admin_campaign_ids=frozenset({7}),
         transport=httpx.MockTransport(api.handle),
     )
     store = EditStore(tmp_path / "private.sqlite3")

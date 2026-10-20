@@ -72,6 +72,7 @@ async def test_expanded_character_edit_workflow_uses_real_stdio_and_local_cli(tm
         env={
             "KANKA_API_TOKEN": "offline-edit-stdio-token",
             "KANKA_ALLOWED_CAMPAIGN_IDS": "7",
+            "KANKA_ADMIN_CAMPAIGN_IDS": "7",
             "KANKA_CREATION_DATABASE": str(database),
             "KANKA_WRITE_CAMPAIGN_IDS": "7",
             "KANKA_WRITE_OPERATIONS": (

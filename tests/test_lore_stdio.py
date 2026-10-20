@@ -32,6 +32,7 @@ async def test_all_new_types_create_edit_and_read_back_through_stdio(tmp_path):
         env={
             "KANKA_API_TOKEN": "offline-lore-stdio-token",
             "KANKA_ALLOWED_CAMPAIGN_IDS": "7",
+            "KANKA_ADMIN_CAMPAIGN_IDS": "7",
             "KANKA_CREATION_DATABASE": str(database),
             "KANKA_WRITE_CAMPAIGN_IDS": "7",
             "KANKA_WRITE_OPERATIONS": "post.create,post.update,"
