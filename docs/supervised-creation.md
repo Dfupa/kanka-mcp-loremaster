@@ -49,6 +49,26 @@ for complete commands.
 
 ## Privacy and supported fields
 
+A later explicitly authorized live retest verified public character, location,
+item, organization and dated-journal core creation through the normal production
+MCP under the default non-admin role. All five returned HTTP 201 with valid
+identity, completed durable execution and passed independent field/visibility
+read-back. Equivalent private preparations were blocked before writing. This
+does not resolve earlier uncertain private requests or authorize private-source
+publication; see [the live diagnosis](live-test-diagnosis.md).
+
+Role defaults to non-admin, independently of draft privacy defaults. Private core
+and membership proposals and visibility-2 attachments fail with
+`visibility_requires_admin` before sending writes. An admin account explicitly
+identified by the user can be declared through the host's
+`KANKA_ADMIN_CAMPAIGN_IDS` setting (comma-separated positive campaign IDs within
+the read allowlist). This only removes a local restriction, never grants upstream
+permissions or bypasses review. Visibility 3 includes the creating user and stays
+available to non-admins. Preparation and execution recheck the role policy, even
+for an already approved proposal; incompatible proposals are never made public
+automatically. Status and GET-only reconciliation remain available after a role
+declaration is removed.
+
 The draft supports a character name/HTML description/privacy, outgoing relation
 requests to existing entities, equipped linked inventory, and named HTML posts.
 It also accepts optional text `age`/`sex` and universal `race_entity_ids` and
@@ -57,7 +77,7 @@ It also accepts optional text `age`/`sex` and universal `race_entity_ids` and
 supplied field is bound into the preview and checked on read-back. Array order
 is not significant; duplicate input references and boolean IDs are rejected.
 Unknown fields, boolean IDs and coerced privacy values fail validation. Character
-privacy defaults to private; relations/posts default to admin visibility.
+privacy defaults to private; relations/posts default to admin/creator visibility (3).
 Inventory entry privacy is **not configurable** and uses Kanka's default; review
 must show that limitation. Private core records do not prove private inventory.
 
@@ -170,6 +190,21 @@ For uncertain outcomes, the local `reconcile` command:
 A search finding no record never makes an unknown request safe to resend. Keep
 uncertainty unresolved if origin cannot be established. There is no automatic
 cleanup or deletion; reports preserve confirmed progress for user decisions.
+
+`get_creation_status` now includes durable sanitized response diagnostics. Set
+`inspect_recovery: true` for bounded GET-only candidate discovery using names and
+response-provided IDs. This never approves, reconciles or retries. Incomplete
+verification is explicit; an empty search does not clear an uncertain intent.
+Different proposals with the same campaign/type/name (and owner for standalone
+posts) cannot replace unresolved creations, including proposals prepared earlier.
+
+POST and PATCH receipts distinguish response headers from body completion,
+transport failures, invalid JSON/envelopes and identity mismatch. They preserve
+status, fixed categories, response shape/hash and candidate IDs, excluding raw
+response text, credentials and arbitrary upstream values. Quota pacing is shared
+across consecutive reads/writes; 429 cooldown is surfaced as `retry_after_seconds`.
+See [live-test diagnosis and implemented fixes](live-test-diagnosis.md) for the
+evidence, response-ID fallback, migration/privacy tests and remaining limits.
 
 ## Offline rehearsal and validation evidence
 

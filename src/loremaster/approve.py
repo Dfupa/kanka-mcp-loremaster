@@ -15,6 +15,7 @@ from loremaster.edit_store import EditStore
 from loremaster.editing import EditService
 from loremaster.execution import CreationService
 from loremaster.kanka import KankaClient, KankaError
+from loremaster.publication import publication_review
 
 
 async def reconcile_edit(store: EditStore, database: Path, proposal_id: str) -> None:
@@ -139,12 +140,37 @@ def main() -> None:
             return
         print(json.dumps(review, ensure_ascii=False, indent=2))
         if args.action == "approve":
+            release = publication_review(
+                review["plan"].get("provenance")
+                if args.kind == "edit"
+                else review.get("provenance")
+            )
             phrase = f"approve {args.proposal_id} {review['review_digest']}"
+            if release:
+                print(
+                    "PUBLIC RELEASE: review the source, proposed copy, metadata, "
+                    "references and redaction diff above. Source labels do not "
+                    "grant permission to publish."
+                )
+                phrase = (
+                    f"publish {args.proposal_id} {review['review_digest']} "
+                    f"{release['review_digest']}"
+                )
             print("Stop other write workers before reapproving a partial run.")
             print(f"To authorize exactly this proposal, type: {phrase}")
             if input("> ").strip() != phrase:
                 raise SystemExit("Approval cancelled")
-            store.approve(args.proposal_id, review["review_digest"], getpass.getuser())
+            if release:
+                store.approve(
+                    args.proposal_id,
+                    review["review_digest"],
+                    getpass.getuser(),
+                    publication_digest=release["review_digest"],
+                )
+            else:
+                store.approve(
+                    args.proposal_id, review["review_digest"], getpass.getuser()
+                )
             print("Approved for five minutes; execution remains a separate action")
     except (PermissionError, ValueError, sqlite3.Error, KankaError):
         raise SystemExit(

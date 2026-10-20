@@ -23,25 +23,21 @@ MAX_PAGE_ROWS = 100
 
 @dataclass
 class ReadBudget:
-    """A per-operation safety budget, paced using the actual account quota."""
+    """Local count/deadline budget; the shared client owns quota pacing."""
 
     rate_limit: int
     deadline: float
     remaining: int = 100
-    next_request: float = 0
 
     async def wait(self) -> None:
-        """Reserve a GET attempt, including retries, or stop before sending it."""
+        """Reserve an attempt, including retries, or stop before sending it."""
         loop = asyncio.get_running_loop()
-        delay = max(0.0, self.next_request - loop.time())
-        if self.remaining <= 0 or loop.time() + delay >= self.deadline:
+        if self.remaining <= 0 or loop.time() >= self.deadline:
             raise KankaError(
                 "Read budget exhausted; continue from the returned section pages",
                 code="read_budget_exhausted",
             )
-        await asyncio.sleep(delay)
         self.remaining -= 1
-        self.next_request = loop.time() + 60 / self.rate_limit
 
 
 # A generic entity_id must be resolved to the module's own child_id.
@@ -84,10 +80,12 @@ class KankaError(Exception):
         *,
         code: str = "invalid_response",
         status_code: int | None = None,
+        retry_after_seconds: float | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.status_code = status_code
+        self.retry_after_seconds = retry_after_seconds
 
 
 def _reject_nonfinite_json(_value: str) -> None:
@@ -116,6 +114,8 @@ class KankaClient:
         token: Personal API token, never written to logs or returned results.
         allowed_campaign_ids: Optional campaign allowlist; None permits every
             campaign authorized by the token.
+        admin_campaign_ids: Explicit host-declared admin campaigns; empty by
+            default. This never grants permissions beyond Kanka's own checks.
         transport: Optional HTTPX transport for deterministic offline tests.
 
     Call ``aclose`` on application shutdown to release pooled connections.
@@ -126,6 +126,7 @@ class KankaClient:
         token: str,
         *,
         allowed_campaign_ids: frozenset[int] | None = None,
+        admin_campaign_ids: frozenset[int] = frozenset(),
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         if not isinstance(token, str) or not token.strip():
@@ -136,9 +137,25 @@ class KankaClient:
         ):
             raise ValueError("Campaign allowlist must contain positive integer IDs")
         self._allowed_campaign_ids = allowed_campaign_ids
+        if not isinstance(admin_campaign_ids, frozenset) or any(
+            type(value) is not int or value <= 0 for value in admin_campaign_ids
+        ):
+            raise ValueError("Admin campaigns must be positive integer IDs")
+        if (
+            allowed_campaign_ids is not None
+            and not admin_campaign_ids <= allowed_campaign_ids
+        ):
+            raise ValueError("Admin campaigns must fit the read campaign allowlist")
+        self._admin_campaign_ids = admin_campaign_ids
         self._budget: ContextVar[ReadBudget | None] = ContextVar(
             "kanka_read_budget", default=None
         )
+        self._rate_lock = asyncio.Lock()
+        self._profile_rate: int | None = None
+        self._profile_pagination: int | None = None
+        self._header_rate: int | None = None
+        self._next_request = 0.0
+        self._cooldown_until = 0.0
         self._http = httpx.AsyncClient(
             base_url=API_BASE_URL,
             headers={
@@ -153,6 +170,77 @@ class KankaClient:
     async def aclose(self) -> None:
         """Release HTTP connections owned by this client."""
         await self._http.aclose()
+
+    def require_write_visibility(
+        self,
+        campaign_id: int,
+        *,
+        is_private: bool = False,
+        visibility_id: int | None = None,
+    ) -> None:
+        """Default to non-admin; host declaration only removes a local restriction.
+
+        This grants no Kanka permission and never restricts GET-only recovery.
+        Visibility 2 is admin-only; 3 also includes the creating user.
+        """
+        self._check_campaign(campaign_id)
+        if type(is_private) is not bool or (
+            visibility_id is not None
+            and (type(visibility_id) is not int or not 1 <= visibility_id <= 5)
+        ):
+            raise ValueError("Invalid write visibility")
+        if (
+            is_private or visibility_id == 2
+        ) and campaign_id not in self._admin_campaign_ids:
+            raise KankaError(
+                "Default role is non-admin; admin-only writes require an explicit "
+                "KANKA_ADMIN_CAMPAIGN_IDS declaration. Keep private content private; "
+                "use an admin account or a separately reviewed visibility proposal",
+                code="visibility_requires_admin",
+            )
+
+    async def reserve_request(self) -> None:
+        """Share quota pacing across GET, POST, PATCH and operation contexts.
+
+        Other processes may consume the same upstream quota. A long server
+        cooldown is reported for later resumption, not slept through indefinitely.
+        """
+        budget = self._budget.get()
+        if budget:
+            await budget.wait()
+        async with self._rate_lock:
+            loop = asyncio.get_running_loop()
+            delay = max(
+                0.0,
+                self._next_request - loop.time(),
+                self._cooldown_until - loop.time(),
+            )
+            if self._cooldown_until - loop.time() > MAX_RETRY_DELAY:
+                raise KankaError(
+                    "Kanka rate-limit cooldown is active; resume later",
+                    code="upstream_http",
+                    status_code=429,
+                    retry_after_seconds=self._cooldown_until - loop.time(),
+                )
+            if budget and loop.time() + delay >= budget.deadline:
+                raise KankaError("Read budget exhausted", code="read_budget_exhausted")
+            if delay:
+                await asyncio.sleep(delay)
+            rates = [rate for rate in (self._profile_rate, self._header_rate) if rate]
+            self._next_request = loop.time() + (60 / min(rates) if rates else 0)
+
+    def observe_response(self, response: httpx.Response, attempt: int = 0) -> None:
+        """Learn effective server quota and cooldown without exposing headers."""
+        value = response.headers.get("X-RateLimit-Limit", "")
+        if value.isascii() and value.isdecimal() and len(value) <= 8 and int(value) > 0:
+            self._header_rate = int(value)
+        loop = asyncio.get_running_loop()
+        rates = [rate for rate in (self._profile_rate, self._header_rate) if rate]
+        if rates:
+            self._next_request = max(self._next_request, loop.time() + 60 / min(rates))
+        if response.status_code == 429:
+            delay = _retry_delay(response.headers.get("Retry-After", ""), attempt)
+            self._cooldown_until = max(self._cooldown_until, loop.time() + delay)
 
     def _check_campaign(self, campaign_id: int) -> None:
         """Reject malformed and disallowed campaign IDs before HTTP requests."""
@@ -184,20 +272,27 @@ class KankaClient:
         """GET and validate one Kanka JSON envelope; never leak bearer tokens."""
         try:
             for attempt in range(MAX_RATE_LIMIT_RETRIES + 1):
-                if budget := self._budget.get():
-                    await budget.wait()
+                await self.reserve_request()
                 response = await self._http.get(path, params=params)
+                self.observe_response(response, attempt)
                 if response.status_code != 429 or attempt == MAX_RATE_LIMIT_RETRIES:
                     break
                 delay = _retry_delay(response.headers.get("Retry-After", ""), attempt)
                 if delay > MAX_RETRY_DELAY:
                     break
-                await asyncio.sleep(delay)
+                # reserve_request owns the wait, including shared quota pacing.
             response.raise_for_status()
         except httpx.HTTPStatusError as exc:
             code = exc.response.status_code
             raise KankaError(
-                f"Kanka returned HTTP {code}", code="upstream_http", status_code=code
+                f"Kanka returned HTTP {code}",
+                code="upstream_http",
+                status_code=code,
+                retry_after_seconds=max(
+                    0.0, self._cooldown_until - asyncio.get_running_loop().time()
+                )
+                if code == 429
+                else None,
             ) from None
         except httpx.RequestError:
             raise KankaError(
@@ -218,6 +313,13 @@ class KankaClient:
         Collection page sizes still come from each response's meta.per_page.
         The request/deadline budgets are local safeguards, not subscription limits.
         """
+        existing = self._budget.get()
+        if existing is not None:
+            yield {
+                "rate_limit": existing.rate_limit,
+                "default_pagination": self._profile_pagination,
+            }
+            return
         profile = (await self._get("profile"))["data"]
         if (
             not isinstance(profile, dict)
@@ -225,9 +327,15 @@ class KankaClient:
             or profile["rate_limit"] <= 0
         ):
             raise KankaError("Missing or invalid account quota metadata")
+        self._profile_rate = profile["rate_limit"]
+        rates = [rate for rate in (self._profile_rate, self._header_rate) if rate]
+        self._next_request = max(
+            self._next_request, asyncio.get_running_loop().time() + 60 / min(rates)
+        )
         pagination = profile.get("default_pagination")
         if pagination is not None and (type(pagination) is not int or pagination < 0):
             raise KankaError("Missing or invalid account quota metadata")
+        self._profile_pagination = pagination
         # Live profiles can return 0 for an unset preference; meta.per_page wins.
         limits = {"rate_limit": profile["rate_limit"], "default_pagination": pagination}
         token = self._budget.set(
@@ -499,6 +607,45 @@ class KankaClient:
             **{key: value for key, value in entity.items() if key != "child"},
             "entity_type": self._entity_type(entity),
         }
+
+    async def get_entity_by_child(
+        self, campaign_id: int, entity_type: str, child_id: int
+    ) -> dict[str, Any]:
+        """Verify a response-provided module ID through its universal entity.
+
+        IDs are never guessed or found by taking a first name match. Inaccessible
+        or inconsistent module/generic records fail closed.
+        """
+        self._check_campaign(campaign_id)
+        self._check_id(child_id, "child_id")
+        if not isinstance(entity_type, str) or entity_type not in ENTITY_ENDPOINTS:
+            raise ValueError("Unsupported entity type")
+        record = (
+            await self._get(
+                f"campaigns/{campaign_id}/{ENTITY_ENDPOINTS[entity_type]}/{child_id}"
+            )
+        )["data"]
+        if (
+            not isinstance(record, dict)
+            or type(record.get("id")) is not int
+            or record["id"] != child_id
+            or (
+                "campaign_id" in record
+                and (
+                    type(record["campaign_id"]) is not int
+                    or record["campaign_id"] != campaign_id
+                )
+            )
+        ):
+            raise KankaError("Kanka returned mismatched module identity")
+        self._check_id(record.get("entity_id"), "entity_id")
+        core = await self.get_entity(campaign_id, record["entity_id"])
+        if (
+            core["entity"]["child_id"] != child_id
+            or core["entity"]["entity_type"] != entity_type
+        ):
+            raise KankaError("Kanka returned mismatched module identity")
+        return core
 
     async def get_entity(self, campaign_id: int, entity_id: int) -> dict[str, Any]:
         """Read verified module details; related collections use their own tools.

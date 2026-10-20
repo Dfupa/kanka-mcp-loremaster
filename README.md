@@ -14,20 +14,26 @@ Transfers and deletion are not supported.
 
 ## Install
 
-`main` includes merged character, organization/member and item creation. The
-`feat/supervised-editing` branch adds supervised editing plus family, quest, map,
-journal and note creation/editing, location creation, standalone posts and child
-quests/notes. These additions are submitted for review before merging to `main`.
-To try this review branch, check it out before installing:
+`main` includes supervised creation/editing through merged PR #5. The local
+`feat/canon-aware-session-notes` branch adds opt-in TXT/PDF session-note previews.
+Install from the checked-out source:
 
 ```bash
 git clone https://github.com/Dfupa/kanka-mcp-loremaster.git
 cd kanka-mcp-loremaster
-git switch feat/supervised-editing
 python3.13 -m venv .venv
 source .venv/bin/activate
 python -m pip install -e '.[dev]'
 ```
+
+For the local notes branch, see [session-note setup and workflow](docs/using-session-notes.md).
+It preserves dialogue, validates host-proposed corrections and prepares
+source-backed entity/quest/post previews using GET-only Kanka evidence. Enable
+it separately with `KANKA_NOTES_DATABASE`. PDF extraction uses the optional `pdf`
+extra (also included in `dev`) and flags pages needing review or OCR. Separately
+setting `KANKA_NOTES_HANDOFF=prepare` with supervised configuration allows selected
+operations to enter existing terminal approval, with verified dependency IDs.
+The bridge never approves or executes automatically. OCR execution remains later work.
 
 ## Credentials and campaign scope
 
@@ -152,6 +158,14 @@ Existing inventory/relation enrichment safeguards remain in effect. Missing
 account quota metadata produces an error rather than guessing a subscription.
 Other applications/tokens share the upstream quota; 429 handling still applies.
 
+The shared client now paces consecutive GET/POST/PATCH operations and profile
+discovery using reported quota and effective response limits. Server cooldown
+survives operation boundaries; long 429 waits return `retry_after_seconds` for
+later resumption. Writes still require separate approval and are never retried
+automatically. Supervised status tools include private, sanitized response-stage
+diagnostics and optional GET-only recovery inspection. See the
+[live-test diagnosis and implemented corrections](docs/live-test-diagnosis.md).
+
 When a budget stops a section, `data.continuation` contains its next page. For
 example, given `{"posts": 21, "assets": 1}`, call:
 
@@ -199,7 +213,8 @@ and as JSON text. This synthetic example represents an empty, complete inventory
   deleted links, `lookup_limit` for bounded enrichment, `unsupported_module`,
   `missing_item_name`, or `pagination_unavailable`.
 - Read API and runtime input failures return `data: null`, `complete: false`, a
-  sanitized `error` object (`code`, `message`, `status_code`), and MCP
+  sanitized `error` object (`code`, `message`, `status_code`, and optional
+  `retry_after_seconds`), and MCP
   `isError: true`. Invalid tool arguments and unknown tool names are rejected by
   the SDK before execution and may have only the SDK's error content.
 
@@ -278,6 +293,24 @@ must be within `KANKA_ALLOWED_CAMPAIGN_IDS` when that read allowlist is configur
 Narrow the operation list to what you actually permit. Kanka permissions still
 apply; no subscription tiers are hardcoded.
 
+The server assumes **non-admin** in every campaign by default. It rejects private
+core records, private memberships and admin-only (`visibility_id: 2`) attachments
+before writing. For an account the user explicitly identifies as an admin, set
+`KANKA_ADMIN_CAMPAIGN_IDS='123'` for only those campaigns. This host declaration
+grants no Kanka permissions; normal campaign scope, approval and API checks remain.
+The IDs must fit the read allowlist when configured. No MCP argument can set the
+role. Existing read access and GET-only recovery are unaffected.
+
+Visibility `3` means admins **and the creator**, not admins only. Creator-readable
+posts remain usable without declaring admin. An explicitly reviewed non-private
+core proposal can use `is_private: false`; the server never changes that value to
+make a private proposal pass. Session notes support an explicit public-copy
+workflow with original/candidate review, a distinct terminal publication phrase
+and private-canon checks. See [non-admin publication](docs/non-admin-publication.md).
+Offline tests cover creation and supported edits. A scoped non-admin live trial
+also verified reviewed private-source publication into a new character, dated
+journal and two dependent public posts; publication editing remains offline-tested.
+
 Thirteen tools are added (twenty-one tools total):
 
 | Tool | Behavior |
@@ -294,11 +327,11 @@ Thirteen tools are added (twenty-one tools total):
 | `prepare_note_creation` | Preview a standalone note with optional tags |
 | `execute_creation` | Consume a local approval for the stored typed proposal and verify read-back |
 | `execute_character_creation` | Compatible character-only execution alias; rejects other entity types |
-| `get_creation_status` | Return scoped local status, confirmed IDs and per-step outcomes without sending writes |
+| `get_creation_status` | Return scoped status, IDs, outcomes and sanitized diagnostics; optional `inspect_recovery` performs GET-only candidate discovery |
 
 Relation `target_id` and inventory `item_entity_id` are universal IDs of existing
 entities; item module IDs are resolved by the backend. Character privacy defaults
-to private, relations/posts to admin visibility. **Inventory entry privacy uses
+to private, relations/posts to admin/creator visibility (3). **Inventory entry privacy uses
 Kanka's default and is not configurable in this slice.** Review those consequences
 before approving. Core proposals create one entity; standalone post proposals add
 one post to an existing owner. Create dependencies in
@@ -498,8 +531,9 @@ remain outside these core metadata contracts.
   are checked for identity and campaign consistency, but a campaign-wide snapshot
   is not provided.
 - Unknown custom modules return generic metadata with an explicit missing-details
-  marker. Calendar rules, chronology, canon proposals, session-note
-  processing, remote hosting and broader mutation governance remain later milestones.
+  marker. Canon-aware TXT/PDF session-note proposals and supervised handoffs are
+  implemented. OCR, automatic revised-note mapping, calendar interpretation,
+  chronology, remote hosting and broader automatic governance remain later work.
 - The installed SDK stdio connection has been verified. Individual desktop-client
   setup and UI behavior require checking in the chosen host.
 

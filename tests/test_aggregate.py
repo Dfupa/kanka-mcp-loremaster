@@ -131,8 +131,8 @@ async def test_quota_pacing_uses_reported_rate_and_hides_profile(
         assert "PRIVATE" not in str(data)
         delays = [call.args[0] for call in sleep.await_args_list]
         assert len(delays) == 2
-        assert delays[0] == 0
-        assert 0 < delays[1] <= 60 / rate_limit
+        # The profile request now consumes a shared slot before both entity GETs.
+        assert all(0 < delay <= 60 / rate_limit for delay in delays)
         assert client._budget.get() is None
     finally:
         await client.aclose()

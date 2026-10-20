@@ -11,6 +11,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any
+from unicodedata import normalize
 
 from loremaster.creation import (
     DRAFT_MODELS,
@@ -23,6 +24,7 @@ from loremaster.creation import (
     validate_creation_draft,
 )
 from loremaster.progress import CreationJournal
+from loremaster.publication import require_publication_review
 
 
 class LocalApprovals:
@@ -58,18 +60,34 @@ class LocalApprovals:
         ).hexdigest()
 
     def prepare(
-        self, draft: CreationDraft, references: dict[str, Any]
+        self,
+        draft: CreationDraft,
+        references: dict[str, Any],
+        *,
+        proposal_id: str | None = None,
+        provenance: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Save an unapproved, immutable draft and its reviewed reference identities."""
         draft = validate_creation_draft(draft)
+        if provenance is not None and not isinstance(provenance, dict):
+            raise ValueError("Preparation provenance must be an object")
         payload = {"draft": draft.model_dump(mode="json"), "references": references}
+        if provenance is not None:
+            payload["provenance"] = provenance
         if not isinstance(draft, CharacterDraft):
             payload["entity_type"] = creation_kind(draft)
         if len(json.dumps(payload, ensure_ascii=False).encode()) > 128 * 1024:
             raise ValueError("Creation proposal exceeds the 128 KiB review budget")
-        proposal_id = uuid.uuid4().hex
+        proposal_id = uuid.uuid4().hex if proposal_id is None else proposal_id
+        CreationJournal._id(proposal_id)
         with self._db:
             self._db.execute("BEGIN IMMEDIATE")
+            previous = self.existing(proposal_id)
+            if previous is not None:
+                if previous["review_digest"] != self._digest(payload):
+                    raise ValueError("Preparation ID is bound to different content")
+                return previous
+            self._uncertain_name(draft)
             count = self._db.execute(
                 "SELECT COUNT(*) FROM proposals WHERE state = 'pending'"
             ).fetchone()[0]
@@ -84,6 +102,37 @@ class LocalApprovals:
                 ),
             )
         return self.review(proposal_id)
+
+    def _uncertain_name(self, draft: CreationDraft, exclude: str | None = None) -> None:
+        """Block a second proposal from bypassing the same unresolved creation."""
+        for row in self._db.execute(
+            "SELECT DISTINCT p.id FROM proposals p JOIN steps s "
+            "ON p.id=s.execution_id WHERE s.state IN ('intent','uncertain')"
+        ):
+            if row["id"] == exclude:
+                continue
+            other = self.draft(row["id"])
+            if (
+                other.campaign_id == draft.campaign_id
+                and creation_kind(other) == creation_kind(draft)
+                and normalize("NFC", other.name).casefold().strip()
+                == normalize("NFC", draft.name).casefold().strip()
+                and getattr(other, "entity_id", None)
+                == getattr(draft, "entity_id", None)
+            ):
+                raise PermissionError(
+                    "Reconcile the existing uncertain creation; "
+                    "a new proposal cannot replace it"
+                )
+
+    def existing(self, proposal_id: str) -> dict[str, Any] | None:
+        """Recover an immutable preparation without resetting its approval/state."""
+        CreationJournal._id(proposal_id)
+        if self._db.execute(
+            "SELECT 1 FROM proposals WHERE id=?", (proposal_id,)
+        ).fetchone():
+            return self.review(proposal_id)
+        return None
 
     def _load(self, proposal_id: str) -> tuple[Any, CreationDraft, dict[str, Any]]:
         if (
@@ -105,6 +154,8 @@ class LocalApprovals:
                 payload["references"], dict
             ):
                 raise ValueError("Changed proposal")
+            if "provenance" in payload and not isinstance(payload["provenance"], dict):
+                raise ValueError("Invalid preparation provenance")
         except (ValueError, KeyError, TypeError):
             raise PermissionError(
                 "Stored proposal failed integrity validation"
@@ -121,10 +172,12 @@ class LocalApprovals:
             "review_digest": row["digest"],
             "preview": preview_creation(draft),
             "references": references,
+            "provenance": json.loads(row["payload"]).get("provenance"),
             "approval_expires_at": row["deadline"],
             "reviewed_by": row["reviewer"],
             "progress": self.journal.progress(proposal_id),
             "steps": self.journal.states(proposal_id),
+            "diagnostics": self.journal.receipts(proposal_id),
             "inventory_visibility": "Kanka default; per-entry privacy is not configured"
             if isinstance(draft, CharacterDraft) and draft.inventory
             else None,
@@ -134,7 +187,14 @@ class LocalApprovals:
         """Return the integrity-checked immutable draft for backend scope checks."""
         return self._load(proposal_id)[1]
 
-    def approve(self, proposal_id: str, reviewed_digest: str, reviewer: str) -> None:
+    def approve(
+        self,
+        proposal_id: str,
+        reviewed_digest: str,
+        reviewer: str,
+        *,
+        publication_digest: str | None = None,
+    ) -> None:
         """Trusted local command only: authorize the reviewed content for five minutes.
 
         Reapproval is an explicit new review, including for a partially completed
@@ -145,6 +205,12 @@ class LocalApprovals:
         with self._db:
             self._db.execute("BEGIN IMMEDIATE")
             row, _draft, _refs = self._load(proposal_id)
+            require_publication_review(
+                json.loads(row["payload"]).get("provenance"),
+                publication_digest,
+                _draft.model_dump(mode="json"),
+            )
+            self._uncertain_name(_draft, proposal_id)
             if row["state"] in ("revoked", "complete"):
                 raise PermissionError("Proposal is revoked or already complete")
             if "uncertain" in self.journal.progress(proposal_id):
@@ -177,6 +243,7 @@ class LocalApprovals:
         with self._db:
             self._db.execute("BEGIN IMMEDIATE")
             row, draft, _refs = self._load(proposal_id)
+            self._uncertain_name(draft, proposal_id)
             if row["state"] != "approved" or row["deadline"] <= time.time():
                 raise PermissionError("A current, unused local approval is required")
             self._db.execute(
@@ -192,6 +259,7 @@ class LocalApprovals:
     def check(self, proposal_id: str, approved: ApprovedCreation) -> None:
         """Recheck expiry, revocation and exact content immediately before each send."""
         row, draft, _refs = self._load(proposal_id)
+        self._uncertain_name(draft, proposal_id)
         if (
             row["state"] != "claimed"
             or row["approval_id"] != approved.proposal_id

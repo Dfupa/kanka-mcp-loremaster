@@ -10,11 +10,13 @@ requires-python = ">=3.13"
 dependencies = ["mcp>=1.30,<2", "httpx>=0.28,<1"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-asyncio>=1", "ruff>=0.10"]
+dev = ["pytest>=8", "pytest-asyncio>=1", "ruff>=0.10", "pypdf>=6.0,<7"]
+pdf = ["pypdf>=6.0,<7"]
 
 [project.scripts]
 kanka-loremaster = "loremaster.server:main"
 kanka-loremaster-approve = "loremaster.approve:main"
+kanka-loremaster-notes = "loremaster.notes_cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/loremaster"]

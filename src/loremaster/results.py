@@ -1,6 +1,6 @@
 """The shared, version 0.1 MCP result contract."""
 
-from typing import Any, TypedDict
+from typing import Any, NotRequired, TypedDict
 
 
 class MissingData(TypedDict):
@@ -16,6 +16,7 @@ class ErrorInfo(TypedDict):
     code: str
     message: str
     status_code: int | None
+    retry_after_seconds: NotRequired[float | None]
 
 
 class ToolResult(TypedDict):

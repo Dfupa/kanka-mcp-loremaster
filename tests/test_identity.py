@@ -204,7 +204,12 @@ async def test_rate_limit_retry_is_bounded_and_honors_wait(
         else:
             with pytest.raises(KankaError, match="429"):
                 await client.list_campaigns()
-        assert [call.args[0] for call in sleep.await_args_list] == expected
+        delays = [call.args[0] for call in sleep.await_args_list]
+        assert len(delays) == len(expected)
+        assert all(
+            actual == pytest.approx(wanted, abs=0.01)
+            for actual, wanted in zip(delays, expected, strict=True)
+        )
     finally:
         await client.aclose()
 
@@ -223,7 +228,8 @@ async def test_repeated_rate_limits_stop_after_three_requests(monkeypatch):
         with pytest.raises(KankaError, match="429"):
             await client.list_campaigns()
         assert len(requests) == 3
-        assert [call.args[0] for call in sleep.await_args_list] == [2, 4]
+        delays = [call.args[0] for call in sleep.await_args_list]
+        assert delays == [pytest.approx(2, abs=0.01), pytest.approx(4, abs=0.01)]
     finally:
         await client.aclose()
 

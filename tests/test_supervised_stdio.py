@@ -63,6 +63,7 @@ async def test_real_stdio_with_separate_local_review_process(tmp_path):
         env={
             "KANKA_API_TOKEN": "offline-stdio-token",
             "KANKA_ALLOWED_CAMPAIGN_IDS": "7",
+            "KANKA_ADMIN_CAMPAIGN_IDS": "7",
             "KANKA_CREATION_DATABASE": str(database),
             "KANKA_WRITE_CAMPAIGN_IDS": "7",
             "KANKA_WRITE_OPERATIONS": (
@@ -160,6 +161,7 @@ async def test_entire_synthetic_workflow_uses_mcp_and_local_approvals(tmp_path):
         env={
             "KANKA_API_TOKEN": "offline-workflow-token",
             "KANKA_ALLOWED_CAMPAIGN_IDS": "7",
+            "KANKA_ADMIN_CAMPAIGN_IDS": "7",
             "KANKA_CREATION_DATABASE": str(database),
             "KANKA_WRITE_CAMPAIGN_IDS": "7",
             "KANKA_WRITE_OPERATIONS": (
