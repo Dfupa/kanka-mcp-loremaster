@@ -1,4 +1,8 @@
-# Kanka LoreMaster
+<h1> Kanka LoreMaster <img src="logo/kanka_mcp_server_icon.png" alt="" width="48" /></h1>
+
+<p align="center">
+  <img src="logo/kanka-loremaster.png" alt="Kanka LoreMaster fantasy lore emblem" width="384" />
+</p>
 
 A Python MCP server for campaign lore hosted on Kanka. It discovers
 campaigns, resolves entity identities, reads descriptions and posts, and retrieves
