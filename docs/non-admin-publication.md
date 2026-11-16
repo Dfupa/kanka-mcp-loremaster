@@ -1,24 +1,18 @@
-# Reviewed session-note publication for non-admin accounts
+# Publishing a public copy of session notes
 
-The default role is non-admin. Session notes can now propose public core records,
-public posts and supported edits to public destinations through the existing
-supervised MCP tools. Offline acceptance covers creation and supported edits.
-A separately authorized live trial verified public character/journal creation
-and two dependent public posts from an explicitly reviewed private synthetic source
-under one non-admin account. Publication editing remains offline-tested only.
+Private notes can contain GM-only information. Before publishing anything,
+review a separate public copy, including its title, metadata and quoted dialogue.
+The original stays in the private notes database.
 
-Public means Kanka's non-private setting, subject to the campaign's own access
-rules. No setting here grants a permission the account lacks. Keep
-`KANKA_ADMIN_CAMPAIGN_IDS` unset for a non-admin account. Existing write campaign
-and operation allowlists and separate notes/approval databases still apply.
+“Public” means Kanka's non-private setting, subject to campaign access rules.
+The server assumes a non-admin account; leave `KANKA_ADMIN_CAMPAIGN_IDS` unset
+unless you actually have an admin account for that campaign.
 
-## Prepare an explicit public copy
+## Prepare the copy
 
-Import and analyse the source normally. `ImportContext.audience` defaults to
-`admin`; the original remains in the private local notes store. That label is
-context, not authentication or permission to publish. A public operation needs
-both `audience: "all"` and a `publication.rationale`. For example, using anchors
-and claim/session keys from the actual imported source:
+Use the [session-note workflow](using-session-notes.md). An operation intended
+for publication needs `audience: "all"` and a `publication.rationale` explaining
+why the selected material can be shared. An example operation is:
 
 ```json
 {
@@ -29,127 +23,67 @@ and claim/session keys from the actual imported source:
   "claim_keys": ["crossing"],
   "fields": {"name": "Session 12 — Crossing the bridge"},
   "audience": "all",
-  "publication": {
-    "rationale": "Publish the selected account after reviewing omitted GM context."
-  },
-  "body": [
-    {"kind": "text", "text": "The group crossed the bridge and returned safely."},
-    {
-      "kind": "quote",
-      "anchor": {"block_id": "b-4", "excerpt": "V: «no pienso bolver»"}
-    }
-  ]
+  "publication": {"rationale": "Publish the reviewed account without GM notes."},
+  "body": [{"kind": "text", "text": "The group crossed the bridge safely."}]
 }
 ```
 
-The backend derives `is_private: false` for a public new core and `visibility_id: 1`
-for a public new post. Callers cannot put visibility or arbitrary IDs in `fields`.
-Existing edits preserve their destination's visibility; publication does not make
-an existing private record public. Non-public references, private prerequisites,
-uncertain identities, canon conflicts, partial reads and other blockers remain.
+Session/claim keys must come from the actual analysis. For a private source,
+write the public body explicitly; `session_text: true` cannot publish the entire
+account. Posts also need an explicit public title. A source label or assistant's
+rationale does not authorize publication.
 
-Private sources require an explicit public `body` for descriptions/posts. They
-cannot use `session_text: true` or automatically publish the generated claim
-summary. Metadata-only edits still show the source and exact proposed field diff.
-Posts from private sources also need an explicit public title, rather than copying
-a private session label. Source/claim audit annotations stay in local provenance
-instead of being appended to public text.
+The server prepares non-private new records or public posts. Existing edits keep
+the target's visibility; this workflow never makes an existing private record
+public. Public references must also be public. Incomplete lookups, unknown
+visibility, conflicting claims and other unresolved questions still block changes.
 
-If the source was explicitly classified as public, `session_text: true` is allowed
-for a full corrected new journal. It still needs publication review. Real session
-dates come from the existing anchored date parser; fantasy dates are not invented.
-Posts retain grouping by owner/session/audience, with all contribution rationales
-bound into the merged review. Different sessions stay separate.
+Quoted dialogue must preserve the complete protected speaker/dialogue passage.
+Partial quotes are rejected rather than expanded into surrounding private text.
+The reviewer must decide whether the words and metadata are appropriate to share;
+there is no automatic guarantee that all secrets have been removed.
 
-Quotes preserve exact spelling and attribution. For a public quote, select the
-complete protected speaker/dialogue span. A partial quote is rejected instead of
-silently expanding into surrounding private context. Omit an unsuitable quote or
-prepare a separately reviewed source revision; the system does not rewrite it.
+## Approve and publish
 
-## Review and release one operation
-
-1. Inspect the full preview. Its `publication` section contains original session
-   text, intended audience, rationale, exact public payload and source-to-public-HTML
-   redaction diff. This is a local review artifact, not a Kanka write.
-2. Prepare one selected operation with `prepare_session_note_handoff`, using the
-   exact preview digest/version. Dependencies need completed, freshly verified
-   IDs. Public prerequisites must also be public. The stored review includes the
-   concrete bound draft and a publication review digest.
-3. Run the existing local terminal command:
+1. Read the full preview, including original text, public copy and omissions.
+2. Prepare one selected operation with `prepare_session_note_handoff`. Confirm
+   the concrete fields and reference IDs in its stored proposal.
+3. Review and approve it in Terminal using the same approval database:
 
    ```bash
-   kanka-loremaster-approve --database /absolute/private/supervised.sqlite3 review PROPOSAL_ID
-   kanka-loremaster-approve --database /absolute/private/supervised.sqlite3 approve PROPOSAL_ID
+   kanka-loremaster-approve --database "$KANKA_CREATION_DATABASE" review PROPOSAL_ID
+   kanka-loremaster-approve --database "$KANKA_CREATION_DATABASE" approve PROPOSAL_ID
    ```
 
-   Add `--kind edit` for an edit. Review text, metadata, references and omitted
-   context. Publication uses the distinct exact phrase displayed by the CLI:
+   Add `--kind edit` for an edit. The command requires this exact displayed phrase:
 
    ```text
    publish PROPOSAL_ID REVIEW_DIGEST PUBLICATION_REVIEW_DIGEST
    ```
 
-   The ordinary `approve ...` phrase cannot release a public note derivative.
-   The stores enforce the additional publication digest before issuing approval;
-   a model rationale, source label or chat reply is not an execution capability.
-4. Execute that proposal through the existing `execute_creation` or `execute_edit`
-   tool. The usual five-minute approval, scope, stale-baseline, uncertainty and
-   verification guards remain. No publication approval/execute tool was added.
-5. Use `inspect_session_note_handoff` with `verify_result: true` before dependent
-   operations. Each later operation has its own terminal review and approval.
+   Use the displayed values. Ordinary `approve ...` confirmation is insufficient
+   for a public copy derived from notes.
+4. Ask the assistant to execute that exact proposal with `execute_creation` or
+   `execute_edit`. Approval expires after five minutes and cannot be replayed.
+5. Verify the result before preparing dependent records. Each needs its own review.
 
-All publication/source metadata stays in the private local stores. Only the
-reviewed Kanka request body is sent. Existing proposals, approval digests and
-uncertain outcomes are not rewritten. Changing a public copy cannot reset an
-existing logical handoff; review and explicitly revoke obsolete preparations.
+The executor checks that cited public material is still available, public and
+unchanged before sending. Changed evidence requires refreshed analysis/review.
+The local stores keep the source and review information; only the reviewed Kanka
+request is sent. These checks are separate API reads, not a transaction lock.
 
-## Canon privacy and practical bounds
+## Limits
 
-Public references need explicitly public core records. Public canon citations are
-limited to public core names/descriptions and public (`visibility_id: 1`) posts on
-public owners. Other fields, inventory/relations evidence and unknown visibility
-are unclassified for public citation and block release. This does not prevent
-supported inventory/relation tools from operating under their own review policy.
+Public citations currently support public core names/descriptions and public
+posts on public owners. Other fields, inventory/relationships and unknown
+visibility cannot be assumed safe to cite publicly. Original-session review is
+limited to 32 KiB per operation; concrete proposal review to 128 KiB. Split large
+operations rather than skipping the review.
 
-The executor rechecks public source visibility and content through fixed GET
-endpoints before writing. Changed/inaccessible sources stop the operation before
-send; refresh the analysis and review rather than retrying an uncertain request.
-These are preflight checks, not an upstream transaction or atomic version lock.
-
-Original session review text is limited to 32 KiB per operation. Public source
-counts use the service's existing per-call budget; concrete proposals retain the
-128 KiB review limit. Split a large session/operation when a bound is reached.
-
-The reviewer must judge whether free-form text and metadata are suitable for
-release. This workflow provides exact-content approval and structured privacy
-checks, not automatic semantic redaction or a separate GM/player authentication
-system. Never share a GM token/store/server with players as a permission layer.
-
-## Validation
-
-The full editable-install, Ruff format/lint/format-check and Pytest sequence passed
-with **1,022 tests**, including 26 publication acceptance cases. A synthetic
-eight-operation workflow exercised new cores, dependent/public posts and supported
-edits. The normal stdio entry point and separate terminal publication CLI also
-passed with mandatory mocked HTTP and no admin declaration. Tests retain a
-synthetic secret in local review while checking it is absent from all sent bodies.
-The rebuilt wheel passed source matching, fixture exclusion, credential scanning,
-tool counts, PDF worker and optimized runtime publication/quote guards.
-
-After reviewing the exact public copies, the user authorized a four-operation live
-trial. The production stdio MCP and separate terminal publication CLI created a
-public character aged 27, a public dated journal and two public posts for separate
-session dates. The posts were prepared only after the new journal's completed ID
-was freshly GET-verified. Pre-send public-source checks used its fingerprint.
-Each operation completed and independent GETs matched the reviewed names,
-descriptions, exact speaker/dialogue text, public visibility, age/date and post
-ownership. The two synthetic private lines and private labels were absent from
-published text. Both posts appeared separately on the new journal.
-
-No new uncertainty occurred. Prior authority/progress rows and all twelve older
-uncertain intents were preserved, without retry, replacement, reset or
-reconciliation. Fixtures remain for manual inspection. No existing-record edit,
-deletion, commit, push, PR or new GitHub CI run was performed. This is scoped live
-evidence for one account/campaign and an authored synthetic source; it does not
-establish live publication editing, other permission combinations, OCR or a host
-model's editorial accuracy on unseen notes.
+Scoped live tests verified public character/journal creation and dependent posts
+from reviewed private notes under a non-admin account. Publication edits have
+mocked coverage, not a separate live trial. This is not separate player/GM
+login authentication. Anyone with access to the local token and stores must be
+trusted. For uncertain writes, use the [creation](supervised-creation.md#if-execution-fails)
+or [edit recovery](supervised-editing.md#unknown-results-and-recovery) procedure;
+do not resend just because a record is not visible.
