@@ -1,50 +1,32 @@
-<h1> Kanka LoreMaster <img src="logo/kanka_mcp_server_icon.png" alt="" width="48" /></h1>
+<h1>Kanka LoreMaster <img src="logo/kanka_mcp_server_icon.png" alt="" width="48" /></h1>
 
 <p align="center">
   <img src="logo/kanka-loremaster.png" alt="Kanka LoreMaster fantasy lore emblem" width="384" />
 </p>
 
-A Python MCP server for campaign lore hosted on Kanka. It discovers
-campaigns, resolves entity identities, reads descriptions and posts, and retrieves
-inventory and explicit relationships. A full-entity tool combines supported direct
-attachments with per-section provenance. Python 3.13 or newer is required.
+Kanka LoreMaster connects an AI assistant to your [Kanka](https://kanka.io)
+campaign. It finds entities, reads descriptions, posts, inventory and
+relationships, and helps turn session notes into proposed campaign updates.
 
-The current MVP uses local **stdio** transport. It is read-only by default.
-Optional supervised creation and character/attachment editing require explicit
-local configuration and separate terminal approval. Scoped live trials verified
-character-core edits, post text, inventory quantity, a relationship label, tag
-assignment replacement and an existing species' description.
-Transfers and deletion are not supported.
+It starts in read-only mode. Creating or editing records requires extra
+configuration and approval in your Terminal for each proposed change.
 
 ## Install
 
-`main` includes supervised creation/editing through merged PR #5. The local
-`feat/canon-aware-session-notes` branch adds opt-in TXT/PDF session-note previews.
-Install from the checked-out source:
+Use Python 3.13 or newer on Linux or macOS:
 
 ```bash
 git clone https://github.com/Dfupa/kanka-mcp-loremaster.git
 cd kanka-mcp-loremaster
-python3.13 -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
-python -m pip install -e '.[dev]'
+python -m pip install -e .
 ```
 
-For the local notes branch, see [session-note setup and workflow](docs/using-session-notes.md).
-It preserves dialogue, validates host-proposed corrections and prepares
-source-backed entity/quest/post previews using GET-only Kanka evidence. Enable
-it separately with `KANKA_NOTES_DATABASE`. PDF extraction uses the optional `pdf`
-extra (also included in `dev`) and flags pages needing review or OCR. Separately
-setting `KANKA_NOTES_HANDOFF=prepare` with supervised configuration allows selected
-operations to enter existing terminal approval, with verified dependency IDs.
-The bridge never approves or executes automatically. OCR execution remains later work.
+For PDF notes, install `python -m pip install -e '.[pdf]'` instead.
 
-## Credentials and campaign scope
-
-Create a personal token in [Kanka's API settings](https://app.kanka.io/settings/api).
-Provide it through `KANKA_API_TOKEN`, using your MCP client's secret configuration
-or an environment variable. For a local Bash session, hidden input avoids placing
-the credential in shell history:
+Create a token in [Kanka's API settings](https://app.kanka.io/settings/api).
+In Bash, enter it without putting it in shell history:
 
 ```bash
 read -rsp 'Kanka API token: ' KANKA_API_TOKEN
@@ -52,193 +34,111 @@ export KANKA_API_TOKEN
 export KANKA_ALLOWED_CAMPAIGN_IDS='123'
 ```
 
-Replace `123` with your campaign ID, or use comma-separated IDs. If the allowlist
-is empty or unset, the server permits campaigns accessible to the token. Campaign
-IDs remain explicit tool arguments; the server never guesses an active campaign.
-The server does **not** automatically load `.env` files.
+Replace `123` with your campaign ID. Multiple IDs are comma-separated. Leaving
+this setting unset permits all campaigns your token can access. The server does
+not load `.env` files automatically.
 
-The token's Kanka permissions determine which records can be read. An allowlist
-restricts campaigns, not audiences within a campaign. Do not share a GM-scoped
-server with players: this MVP has no separate GM/player permission layer or
-multi-user authentication. Never commit credentials, lore dumps, or live
-responses to this public repository.
+## Connect your assistant
 
-## Connect an MCP client
-
-The executable is `kanka-loremaster`, or equivalently
-`python -m loremaster.server`. Your MCP client launches it and communicates over
-stdin/stdout; diagnostics use stderr.
-
-For clients supporting the `mcpServers` JSON format:
+Your MCP client starts `kanka-loremaster` and communicates through its standard
+input and output. For clients that use `mcpServers` configuration:
 
 ```json
 {
   "mcpServers": {
     "kanka-loremaster": {
       "command": "/absolute/path/kanka-mcp-loremaster/.venv/bin/kanka-loremaster",
-      "env": {
-        "KANKA_ALLOWED_CAMPAIGN_IDS": "123"
-      }
+      "env": {"KANKA_ALLOWED_CAMPAIGN_IDS": "123"}
     }
   }
 }
 ```
 
-Configure `KANKA_API_TOKEN` through the host's supported secret/environment
-mechanism as well. Environment inheritance varies between clients; exporting a
-variable in a terminal does not guarantee that a separately launched desktop
-client passes it to the server. The example intentionally contains no credential.
+Also supply `KANKA_API_TOKEN` through your client's secret or environment settings.
+A desktop client may not inherit variables from your Terminal.
 
-The bundled smoke check is also a working MCP client: it explicitly forwards
-environment credentials and launches a fresh server process over stdio.
+For ChatGPT, OpenAI's
+[Secure MCP Tunnel](https://developers.openai.com/api/docs/guides/secure-mcp-tunnels)
+can connect this same local server. The tunnel needs its own runtime credential
+and must stay running while ChatGPT uses it. No separate LoreMaster build is
+needed. Direct ChatGPT file uploads and browser approval are not part of this
+version; import notes and approve changes in Terminal.
 
-## Tools
+Access follows your Kanka token. Anyone using the connection can read what that
+token can read. A GM connection must not be shared with players as a way to
+restrict their access.
 
-| Tool | Arguments | Behavior |
-| --- | --- | --- |
-| `list_campaigns` | none | All token-visible campaigns permitted by the allowlist |
-| `find_entities_by_name` | `campaign_id`, `name` | Complete name search, with exact and partial matches separated |
-| `search_entities` | `campaign_id`, `query`, optional `page` | Search candidates with verified universal IDs; completeness may be unknown |
-| `get_entity` | `campaign_id`, `entity_id` | Generic metadata and verified module-specific details |
-| `get_entity_full` | `campaign_id`, `entity_id`, optional `sections`, `section_pages` | Core details and all requested direct attachments, with independent section status and continuation |
-| `get_entity_posts` | `campaign_id`, `entity_id`, optional `page` | One page of posts |
-| `get_entity_inventory` | `campaign_id`, `entity_id`, optional `page` | One inventory page, including quantities, equipment state, positions and linked item names |
-| `get_entity_relations` | `campaign_id`, `entity_id`, optional `page` | One relation page, preserving labels, direction, duplicate edges and related names |
+## Read your campaign
 
-Pages start at 1. Use the **universal entity ID**, not a character or item module
-ID. Name and search inputs are limited to 1000 characters. Resolve names with
-`find_entities_by_name`; if several exact matches remain,
-ask the user to select a candidate. Actual entity records determine identity;
-article mentions do not.
+List campaigns, choose one, then search for the entity's name. If several records
+match, choose the right one before reading or proposing changes.
 
-A typical interaction is:
+| Tool | What it reads |
+| --- | --- |
+| `list_campaigns` | Available campaigns |
+| `find_entities_by_name` | Exact and partial name matches |
+| `search_entities` | One page of general search results |
+| `get_entity` | Metadata and type-specific details |
+| `get_entity_full` | Details plus selected related sections |
+| `get_entity_posts` | One page of posts |
+| `get_entity_inventory` | Quantities, equipment and linked items |
+| `get_entity_relations` | Recorded relationships and their direction |
 
-1. Call `list_campaigns` and select a campaign.
-2. Call `find_entities_by_name` with the desired character's name.
-3. Use the chosen candidate's `entity_id` with `get_entity`,
-   `get_entity_inventory`, or `get_entity_relations`.
-4. Follow `next_page` until it is null, checking errors and missing data on every
-   response. Cite the returned sources when answering.
+Tools take an explicit `campaign_id`. Entity tools use Kanka's **universal entity
+ID**, not the separate character/item/module ID. Name lookup returns the relevant
+IDs; callers do not need a local ID dictionary.
 
-Names, relationship labels, descriptions and HTML remain in their source
-language. Natural-language answers can be translated by the calling assistant.
-Inventory custom names take precedence over linked item names. Relation labels
-describe recorded directed edges; the server does not infer reciprocity or family
-ties from their wording.
+`get_entity_full` can include posts, inventory, relationships, attributes,
+reminders, assets, abilities, tags, mentions, permissions and image references.
+Omit `sections` for all supported sections, or use `[]` for core details only.
+It returns file/image metadata rather than downloading files or following every
+linked entity recursively.
 
-### Full entity reads
+Check `error`, `complete`, `missing_data` and `next_page` on every response.
+Follow pagination before treating a collection as complete. Missing or denied
+records are not empty records. General search can lack pagination information;
+use `find_entities_by_name` for complete name lookup.
 
-`get_entity_full` includes core metadata and module-specific fields (including
-description, traits and available dates), plus these supported sections:
-`posts`, `inventory`, `relations`, `attributes`, `reminders`, `assets`, `abilities`,
-`tags`, `mentions`, `permissions` and `images`. Assets include recorded aliases,
-links and file metadata. Images are portrait/header references; binary files and
-linked entities' complete lore are not downloaded recursively. Mentions remain
-separate from recorded relations. Fantasy dates and calendar IDs are preserved
-verbatim; calendar rules and date conversions are not inferred.
+Full reads may return `data.continuation`, for example `{"posts": 21}`. Resume
+with `sections: ["posts"]` and `section_pages: {"posts": 21}`. Each call reads
+current data; it is not a fixed campaign snapshot.
 
-Omit `sections` to request all supported sections, supply a list to narrow the
-read, or use `[]` for core only. Each entry in `data.sections` reports `data`,
-`source`, `page`, `next_page`, `complete`, `missing_data` and `status` (`ok`,
-`partial`, `unavailable` or `deferred`). A section denied with HTTP 403 or missing
-with HTTP 404 has `data: null`; it is never presented as empty. Other API failures
-and invalid identities fail the entire tool call. `not_requested` names excluded
-sections; top-level completeness applies to the requested scope.
+## Work with notes or change records
 
-The aggregate reads `/profile` to discover `rate_limit` and `default_pagination`,
-without returning personal profile fields. It spaces its GET attempts using the
-reported quota, including retries, and accepts collection sizes according to
-`meta.per_page`. There is no hardcoded subscription-tier table or requested page
-size. Account pagination settings and effective API page sizes can differ; a live
-profile may report `0` for an unset preference, which is preserved without using
-it as the page size. See
-[Kanka's profile](https://app.kanka.io/api-docs/1.0/profile) and
-[pagination contracts](https://app.kanka.io/api-docs/1.0/misc/pagination).
+| Task | Guide |
+| --- | --- |
+| Import TXT/PDF and propose campaign updates | [Session notes](docs/using-session-notes.md) |
+| Enable writes, create records and approve proposals | [Creating entities](docs/supervised-creation.md) |
+| Change an existing record or attachment | [Editing entities](docs/supervised-editing.md) |
+| Use families, quests, maps, journals and notes | [Entity fields](docs/additional-entities.md) |
+| Publish a reviewed copy of private notes | [Public copies](docs/non-admin-publication.md) |
 
-Local safety budgets are independent of account entitlements: the aggregate
-allows 100 GET attempts and 90 seconds for paced reads, within the existing
-120-second tool timeout, and at most 20 collection pages per section per call.
-Existing inventory/relation enrichment safeguards remain in effect. Missing
-account quota metadata produces an error rather than guessing a subscription.
-Other applications/tokens share the upstream quota; 429 handling still applies.
+Names, descriptions and dialogue retain their original language. The assistant
+can explain results in your language. Note corrections preserve quoted dialogue
+and keep suggestions separate from established campaign facts.
 
-The shared client now paces consecutive GET/POST/PATCH operations and profile
-discovery using reported quota and effective response limits. Server cooldown
-survives operation boundaries; long 429 waits return `retry_after_seconds` for
-later resumption. Writes still require separate approval and are never retried
-automatically. Supervised status tools include private, sanitized response-stage
-diagnostics and optional GET-only recovery inspection. See the
-[live-test diagnosis and implemented corrections](docs/live-test-diagnosis.md).
+## Limits
 
-When a budget stops a section, `data.continuation` contains its next page. For
-example, given `{"posts": 21, "assets": 1}`, call:
+- Kanka permissions still apply. The server assumes a non-admin account unless
+  explicitly configured otherwise. Enabling writes does not grant Kanka access.
+- Account/API quotas determine request pacing. Local time, page and output limits
+  are safety limits, not subscription restrictions.
+- Listings stop at 20 pages; inventory/relationship details follow at most 20
+  distinct linked records per call. Incomplete results are marked explicitly.
+- Tool responses are limited to 256 KiB. Full reads stop after 100 GET attempts
+  or 90 seconds; the overall tool timeout is 120 seconds.
+- Changes require separate approval and a read-back check. There is no automatic
+  rollback. If a write's result is unknown, inspect status before doing anything
+  else; do not resend it or replace the approval database.
+- Deletion, transfers, image uploads, OCR, calendar interpretation and automatic
+  campaign rewriting are not supported.
+- Linux has been used for local validation. macOS still needs checking on a Mac.
+  Mocked tests do not prove every live operation. Map creation and some collection
+  edits, in particular, lack live verification.
 
-```json
-{
-  "campaign_id": 123,
-  "entity_id": 456,
-  "sections": ["posts", "assets"],
-  "section_pages": {"posts": 21, "assets": 1}
-}
-```
+## Development checks
 
-Combine retrieved section pages while checking every missing-data marker. A
-response starting after page 1 remains incomplete on its own. Continuation does
-not fix unavailable records, missing pagination metadata or enrichment limits.
-Core data is re-read on each call; this is not a transactional snapshot or an
-update payload. Narrow sections when an aggregate exceeds the response-size cap.
-
-## Result contract
-
-Every successful tool response supplies the same object in MCP `structuredContent`
-and as JSON text. This synthetic example represents an empty, complete inventory:
-
-```json
-{
-  "data": [],
-  "campaign_id": 123,
-  "entity_id": 456,
-  "source": "https://api.kanka.io/1.0/campaigns/123/entities/456/inventory?page=1",
-  "complete": true,
-  "page": 1,
-  "next_page": null,
-  "missing_data": [],
-  "error": null
-}
-```
-
-- `complete` applies to this response: all primary collection pages and expected
-  linked data must be included. A response starting on page 2 is not a complete
-  collection, even when it is the last page. A caller may combine all pages after
-  checking each one. Completeness never implies access to records hidden by Kanka.
-- `next_page` concerns the primary collection. A null value does not establish
-  completeness when linked data is missing or pagination is unavailable.
-- `missing_data` contains endpoint/reason pairs: `unavailable` for inaccessible or
-  deleted links, `lookup_limit` for bounded enrichment, `unsupported_module`,
-  `missing_item_name`, or `pagination_unavailable`.
-- Read API and runtime input failures return `data: null`, `complete: false`, a
-  sanitized `error` object (`code`, `message`, `status_code`, and optional
-  `retry_after_seconds`), and MCP
-  `isError: true`. Invalid tool arguments and unknown tool names are rejected by
-  the SDK before execution and may have only the SDK's error content.
-
-Creation failures preserve available progress under `data` and still set
-`complete: false`, `error` and MCP `isError: true`. After a timeout, consult
-`get_creation_status` for durable intent/results.
-
-Current Kanka search responses have no pagination metadata. Their candidates are
-returned with `complete: false` and `pagination_unavailable`; an empty search
-response is not evidence of absence. Use `find_entities_by_name` for complete
-name-based resolution. Search IDs and child IDs are normalized against verified
-generic records rather than trusting the search response's child ID.
-
-## Verification
-
-The offline suite uses synthetic HTTP responses and dummy tokens. It includes a
-real subprocess stdio MCP session covering initialization, all eight tools,
-structured schemas, errors, recovery, campaign boundaries and HTTP cleanup.
-
-Run the required checks in order:
+The suite uses synthetic records and mocked API responses:
 
 ```bash
 python -m pip install -e '.[dev]'
@@ -248,297 +148,9 @@ ruff format --check .
 pytest -q
 ```
 
-For the authorized live campaign demonstrations, set the environment variables
-above and run:
+Do not use real credentials or campaign data in tests, commits or CI output.
+The optional `scripts/verify_mcp.py` check makes real GET requests using your
+token and diagnostic targets in the script. Review it before running it;
+it is not part of the offline suite.
 
-```bash
-python scripts/verify_mcp.py
-```
-
-This check discovers campaigns and resolves the three demonstration names
-configured in the script, then reads descriptions, inventory, relations, search
-and posts through the actual stdio server. It prints fixed pass/fail diagnostics,
-never lore, names, IDs or credentials. Missing links, ambiguous identities and
-unexpected pagination cause failure. The explicit troubleshooting campaign in
-the smoke scripts is not a server default or an authorization bypass.
-The aggregate smoke check requests the posts section only; it does not establish
-live correctness of every attachment endpoint. A separate GET-only stdio check
-retrieved all eleven sections for one authorized entity: nine sections completed,
-while attributes and permissions returned no pagination metadata and were marked
-incomplete. This observation does not establish behavior for every entity,
-permission set, account or campaign.
-
-The optional GitHub live workflow is manually dispatched and restricted to the
-development branch. GitHub requires its workflow file to exist on the default
-branch before dispatch is available. Normal CI never uses a Kanka token or makes
-live campaign requests.
-
-## Optional supervised creation
-
-This feature is opt-in. Offline validation uses mocked HTTP, a real stdio server
-and separate approval process. A separately authorized public synthetic live run
-also passed through the normal executor and local approval command, including
-profile fields, attachments, independent read-back and durable status. This does
-not establish behavior for every account or permission set. Leave these variables
-unset for the normal eight read-only tools.
-
-Select an existing private directory outside Git, replace the sample paths/IDs,
-and explicitly configure all three settings in the server's environment:
-
-```bash
-export KANKA_CREATION_DATABASE='/absolute/private/directory/creation.sqlite3'
-export KANKA_WRITE_CAMPAIGN_IDS='123'
-export KANKA_WRITE_OPERATIONS='character.create,relation.create,inventory.add,post.create,organisation.create,organisation.member.add,item.create'
-```
-
-Partial configuration fails startup. The directory must exist; new database files
-use mode 0600. Existing insecure files and symlinks are rejected. Write campaigns
-must be within `KANKA_ALLOWED_CAMPAIGN_IDS` when that read allowlist is configured.
-Narrow the operation list to what you actually permit. Kanka permissions still
-apply; no subscription tiers are hardcoded.
-
-The server assumes **non-admin** in every campaign by default. It rejects private
-core records, private memberships and admin-only (`visibility_id: 2`) attachments
-before writing. For an account the user explicitly identifies as an admin, set
-`KANKA_ADMIN_CAMPAIGN_IDS='123'` for only those campaigns. This host declaration
-grants no Kanka permissions; normal campaign scope, approval and API checks remain.
-The IDs must fit the read allowlist when configured. No MCP argument can set the
-role. Existing read access and GET-only recovery are unaffected.
-
-Visibility `3` means admins **and the creator**, not admins only. Creator-readable
-posts remain usable without declaring admin. An explicitly reviewed non-private
-core proposal can use `is_private: false`; the server never changes that value to
-make a private proposal pass. Session notes support an explicit public-copy
-workflow with original/candidate review, a distinct terminal publication phrase
-and private-canon checks. See [non-admin publication](docs/non-admin-publication.md).
-Offline tests cover creation and supported edits. A scoped non-admin live trial
-also verified reviewed private-source publication into a new character, dated
-journal and two dependent public posts; publication editing remains offline-tested.
-
-Thirteen tools are added (twenty-one tools total):
-
-| Tool | Behavior |
-| --- | --- |
-| `prepare_character_creation` | Accept campaign, name, HTML `entry`, privacy and optional relation/inventory/post lists; resolve references and store an immutable preview without POSTs |
-| `prepare_organisation_creation` | Preview an organization and optional memberships of existing characters, without POSTs |
-| `prepare_item_creation` | Preview an item with optional type, price, size and weight text, without POSTs |
-| `prepare_family_creation` | Preview a typed family draft with tags and locations |
-| `prepare_location_creation` | Preview a location with optional title, type and tags |
-| `prepare_entity_post_creation` | Preview a post on an existing entity using a typed draft with owner ID and visibility |
-| `prepare_quest_creation` | Preview a typed mission/quest draft with tags, locations and an optional instigator |
-| `prepare_map_creation` | Preview map metadata with tags, location and real-world mode; no image upload |
-| `prepare_journal_creation` | Preview a diary/session journal with tags, locations, author and literal date |
-| `prepare_note_creation` | Preview a standalone note with optional tags |
-| `execute_creation` | Consume a local approval for the stored typed proposal and verify read-back |
-| `execute_character_creation` | Compatible character-only execution alias; rejects other entity types |
-| `get_creation_status` | Return scoped status, IDs, outcomes and sanitized diagnostics; optional `inspect_recovery` performs GET-only candidate discovery |
-
-Relation `target_id` and inventory `item_entity_id` are universal IDs of existing
-entities; item module IDs are resolved by the backend. Character privacy defaults
-to private, relations/posts to admin/creator visibility (3). **Inventory entry privacy uses
-Kanka's default and is not configurable in this slice.** Review those consequences
-before approving. Core proposals create one entity; standalone post proposals add
-one post to an existing owner. Create dependencies in
-separately approved proposals and use their returned IDs in later proposals.
-
-Optional `age` and `sex` are text fields. `race_entity_ids` (species) and
-`location_entity_ids` accept lists of universal entity IDs. The backend verifies
-their module types and resolves the module IDs for Kanka's `races` and `locations`
-arrays. These fields participate in review, durable intent and read-back checks;
-they are not free-form relationships or description-only mentions. See the
-[character API contract](https://app.kanka.io/api-docs/1.0/characters).
-
-Organization and item creation passed offline tests and a separately authorized
-public synthetic live run in one campaign. The live run used the normal stdio
-server, separate local approvals and read-back, including two real memberships.
-This is scoped acceptance evidence, not a guarantee for every account or field.
-Organization `members` entries take `character_entity_id` (universal), optional
-`role` (default `Member`), `is_private`
-(default true), `pin_id` (0–3, default 0) and `status_id` (0–2, default 0 for active).
-The backend resolves character IDs and the newly created organization's module ID
-for actual membership POSTs. `organisation.create` and `organisation.member.add`
-are separate permissions. Memberships are distinct from generic relationships.
-
-Items support name, HTML description, privacy and optional text `type`, `price`,
-`size`, `weight`. Creating an item does not add it to anybody's inventory.
-Organization/item core records default to private. Unsupported fields are rejected.
-See Kanka's [organization](https://app.kanka.io/api-docs/1.0/organisations),
-[membership](https://app.kanka.io/api-docs/1.0/organisation-members) and
-[item](https://app.kanka.io/api-docs/1.0/items) contracts. Tool visibility alone
-never grants permission; the whole proposal must fit the explicit scope.
-
-After preparing a proposal, review it through the separate local command:
-
-```bash
-kanka-loremaster-approve --database /absolute/private/directory/creation.sqlite3 review PROPOSAL_ID
-kanka-loremaster-approve --database /absolute/private/directory/creation.sqlite3 approve PROPOSAL_ID
-```
-
-Approval displays the stored fields/references/progress and requires an
-interactive terminal plus the exact displayed proposal/digest phrase. These two
-commands need no API token. Approval lasts five minutes from local confirmation,
-is single-use, and is checked again before each POST. Then call
-`execute_creation` through MCP (`execute_character_creation` remains a
-character-only alias). Neither chat confirmation nor a checksum can issue
-approval; no approval command is registered as an MCP tool.
-
-**Trust boundary:** access to this private local file authorizes the host command.
-The reviewer name records the OS user, not a remote login. Anyone, including an
-agent, with equivalent local shell/file access must be trusted. This workflow is
-for a trusted local host; it provides no multi-user authentication.
-
-On failure or timeout, inspect status before taking action. Known rejections may
-resume after a fresh local approval, with completed fields and IDs re-read first.
-Lost responses/interrupted sends remain uncertain and block approval and retry.
-For a record whose origin you have verified, stop all creation workers and use:
-
-```bash
-kanka-loremaster-approve --database /absolute/private/directory/creation.sqlite3 reconcile PROPOSAL_ID --candidate-id RECORD_ID
-```
-
-Reconciliation uses GETs with the matching server configuration/token, displays
-matching evidence and requires an exact confirmation. For a core character,
-organization or item, use its universal entity ID. For an attachment or membership,
-use that record's own ID.
-Matching fields alone cannot prove origin, and absence never authorizes a retry.
-Reconciliation sends no POST and requires fresh approval afterward. To stop
-subsequent sends, use the same command with `revoke PROPOSAL_ID`; already sent
-requests cannot be cancelled or rolled back. Keep the database: it contains
-potentially private lore and the IDs needed for recovery.
-
-See [the supervised-creation contract](docs/supervised-creation.md) for lifecycle,
-verification and remaining limitations. A completed report means the requested
-fields and recorded IDs were read back; it does not claim atomic transactions or
-frozen upstream state.
-
-### Offline creation rehearsal
-
-The independent script remains network-isolated and never reads an API token:
-
-```bash
-python scripts/offline_creation.py
-python scripts/offline_creation.py --approve YOUR_PREVIEW_DIGEST
-```
-
-Review the first command's returned `content_digest` before the second. The CLI
-acts as the trusted offline reviewer and issues a process-local grant. Both HTTP
-clients require `httpx.MockTransport`. The frozen scenario creates a synthetic
-character description, relation, equipped linked inventory and two posts with
-five mocked POSTs, followed by aggregate read-back. Exiting discards the simulated
-campaign; no cleanup writes occur. Optional SQLite progress/reconciliation is also
-covered by the offline tests.
-
-The [synthetic acceptance workflow](docs/synthetic-creation-validation.md) retains
-its separate read-server report. Run `pytest -q -rP tests/test_creation_server.py`
-for expected/observed fields. New opt-in execution and cross-process approval
-coverage lives in `tests/test_supervised_execution.py`, `tests/test_local_approvals.py`
-and `tests/test_supervised_stdio.py`. Organization and item regression coverage is
-in `tests/test_organisation_creation.py` and `tests/test_item_creation.py`. The
-complete mocked stdio scenario creates a mentor, compass item, Éldan with
-attachments, and an organization with both characters as members, using ten
-mocked POSTs and separate approvals. Test fixtures are excluded from the installed
-package. Campaign-specific one-off live helpers are not release files.
-
-### Supervised character and attachment editing
-
-On `feat/supervised-editing`, the same explicit private database/campaign settings
-can enable update operations through `KANKA_WRITE_OPERATIONS`. Creation permissions
-never grant editing permissions. Enabling any update class adds thirteen edit tools;
-normal opt-in startup then has thirty-four tools. Default startup remains read-only.
-
-| Tool | Editable fields | Operation class |
-| --- | --- | --- |
-| `prepare_character_edit` | Name, HTML description, text age/sex, species/location/family/tag assignment lists | `character.update` |
-| `prepare_species_edit` | One existing species' description only | `race.update` |
-| `prepare_family_edit` | Family name/description/type/tags/locations | `family.update` |
-| `prepare_quest_edit` | Mission name/description/type/tags/locations/instigator | `quest.update` |
-| `prepare_map_edit` | Map name/description/type/tags/location/real-world mode | `map.update` |
-| `prepare_journal_edit` | Diary name/description/type/tags/locations/author/date | `journal.update` |
-| `prepare_note_edit` | Standalone note name/description/type/tags | `note.update` |
-| `prepare_post_edit` | One identified post's name/HTML on any verified owner entity | `post.update` |
-| `prepare_inventory_edit` | One identified entry's quantity, equipment, position or item link | `inventory.update` |
-| `prepare_relation_edit` | One outgoing edge's label, attitude, pin, colour or target | `relation.update` |
-| `prepare_tag_edit` | Replace one identified tag assignment | `tag.update` |
-| `execute_edit` | Execute only a stored, locally approved diff | The proposal's update class |
-| `get_edit_status` | Local status and uncertainty, without mutation | Configured edit scope |
-
-Preparation requires `campaign_id`, the character's universal `entity_id`, a typed
-`changes` object and, for an attachment, its exact record ID. Species/location/tag
-and item references also use universal IDs; verified module IDs are resolved by
-the backend. Species/location/tag lists explicitly replace assignments, with `[]`
-meaning clear. Omitted fields remain unchanged; null/blank text and no-op edits
-are rejected. Tag assignment edits do not rename a shared campaign tag.
-Species description editing instead takes the species' universal `entity_id`;
-the backend verifies its type and resolves the race module ID. Inventory PATCHes
-include the unchanged owner, item/name and amount when required by Kanka; the
-reviewed diff separates actual changes from these preserved fields.
-
-For example, the core changes object can be:
-
-```json
-{"age": "29", "entry": "<p>Revised description.</p>"}
-```
-
-Review and approve the resulting proposal through the separate local terminal:
-
-```bash
-kanka-loremaster-approve --database /absolute/private/changes.sqlite3 --kind edit review PROPOSAL_ID
-kanka-loremaster-approve --database /absolute/private/changes.sqlite3 --kind edit approve PROPOSAL_ID
-```
-
-Then call `execute_edit` with campaign/proposal IDs. The backend re-reads the exact
-baseline and rejects intervening changes, journals intent before the single PATCH,
-and independently verifies the result and retained guard fields. Uncertain writes
-block further edits to that character; local GET-only reconciliation and explicit
-origin review are required. A confirmed write with failed verification cannot be
-resent. A pre-send GET is not an upstream atomic lock: another client can still
-write between that read and PATCH. See [editing](docs/supervised-editing.md) for
-scope, IDs, recovery and tested limitations. One separately authorized live
-character-core trial verified a rename, age/sex and species/tag additions from
-empty lists, with preservation of untouched core fields and public visibility.
-A follow-up trial verified post text, inventory quantity, an outgoing relationship
-label, replacement of one existing tag assignment and a species description.
-Kanka wrapped the requested plain descriptions in a paragraph; verification
-accepts that exact wrapper while preserving checks on untouched fields. Inventory
-updates include required preserved identity fields. Tag responses that omit the
-assignment ID require corroboration from the fully paginated assignment list.
-Collection clearing, transfers and other update combinations remain unverified
-live. This evidence covers one account/campaign and does not grant further writes.
-
-The additional family, quest, map, journal and note editing paths are
-**offline-validated only**. A subsequent authorized live creation trial verified
-location/family/quest/journal/note records, quest-instigator and journal-author
-references, and a real character-family assignment. Map creation remains offline
-only. Each type has separate operation scope and reuses local approval,
-durable intent and read-back. Their creation tools take a typed `draft` object;
-editing takes the target's universal ID and typed `changes`. See
-[supported fields, examples and test scope](docs/additional-entities.md).
-Family trees, quest elements, map images/markers/layers and calendar configuration
-remain outside these core metadata contracts.
-
-## Limits and next milestones
-
-- Complete campaign/name listings stop after 20 pages. Page sizes use the API's
-  `meta.per_page`; legacy responses without that field retain a 100-row safety
-  guard. Missing or inconsistent pagination causes an error, or an explicit
-  unknown-completeness marker for newly supported attachment collections.
-- Inventory and relations resolve at most 20 distinct linked records per call.
-  Remaining edges/items stay visible with explicit missing-data markers. Search
-  rejects more than 20 candidates; narrow the query or use the name resolver.
-- Each GET has a 15-second timeout. HTTP 429 receives at most two backoff retries;
-  `Retry-After` supports both seconds and HTTP dates. Delays over 30 seconds are
-  reported to the caller for a later retry. Each MCP operation has a 120-second total
-  time budget. There is no persistent cache or local name-to-ID dictionary.
-- Tool JSON payloads above 256 KiB return `result_too_large` rather than being
-  silently truncated. Large articles may exceed this MVP limit.
-- Reads are not a transaction: records can change between requests. Linked records
-  are checked for identity and campaign consistency, but a campaign-wide snapshot
-  is not provided.
-- Unknown custom modules return generic metadata with an explicit missing-details
-  marker. Canon-aware TXT/PDF session-note proposals and supervised handoffs are
-  implemented. OCR, automatic revised-note mapping, calendar interpretation,
-  chronology, remote hosting and broader automatic governance remain later work.
-- The installed SDK stdio connection has been verified. Individual desktop-client
-  setup and UI behavior require checking in the chosen host.
-
-MIT licensed. See [LICENSE](LICENSE).
+Licensed under [MIT](LICENSE).

@@ -4,3 +4,19 @@ __pycache__/
 .venv/
 *.egg-info/
 .env
+.kankatoken*
+.credtunnel*
+..kankatoken.*
+..credtunnel.*
+
+# Private development notes, not published documentation.
+/AGENTS.md
+/AGENT.md
+/codex_kanka_loremaster_AGENTS.md
+/canon-aware-instructions.md
+/TODELETE.md
+/docs/canon-aware-session-notes.md
+/docs/synthetic-creation-validation.md
+/docs/duncan-eldan-offline-validation.md
+/docs/live-test-diagnosis.md
+/docs/repository-review.md
